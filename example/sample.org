@@ -1,0 +1,47 @@
+#+title: Sample Org File for Testing soft-narrow
+
+Try: M-x soft-narrow-mode, then move point to a heading and press C-x n s
+
+* Introduction
+
+This is an introduction paragraph.
+It contains multiple lines of text for testing narrow-to-region (C-x n n).
+
+* Code Examples
+
+** Emacs Lisp
+
+#+begin_src emacs-lisp
+(defun hello ()
+  (message "Hello from org-babel!"))
+#+end_src
+
+** Python
+
+#+begin_src python
+def greet(name):
+    return f"Hello, {name}!"
+
+print(greet("World"))
+#+end_src
+
+* Data Section
+
+| Name    | Score | Grade |
+|---------+-------+-------|
+| Alice   |    95 | A     |
+| Bob     |    82 | B     |
+| Charlie |    71 | C     |
+
+* Notes
+Some notes for testing.
+
+** Sub-heading A
+Content of sub-heading A.
+
+** Sub-heading B
+Content of sub-heading B.
+
+* Conclusion
+
+Final paragraph.
