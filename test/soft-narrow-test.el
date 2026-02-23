@@ -1563,6 +1563,72 @@ to rest at the exact end position of the narrowed region."
           (should (get-text-property 400 'cursor-intangible)))
       (soft-narrow-test--cleanup-buffer buf))))
 
+(ert-deftest soft-narrow-boundary-get-pos-property ()
+  "Test that get-pos-property returns correct values at narrowed region boundaries.
+Position l (start of region) and r (end of region) should NOT be intangible,
+while positions just outside should be intangible."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Position 200 (start boundary) should NOT be intangible
+          (should-not (get-pos-property 200 'cursor-intangible))
+          ;; Position 400 (end boundary) should NOT be intangible
+          (should-not (get-pos-property 400 'cursor-intangible))
+          ;; Position just before start should be intangible
+          (should (get-pos-property 199 'cursor-intangible))
+          ;; Position just after end should be intangible
+          (should (get-pos-property 401 'cursor-intangible)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-stacked-boundary-get-pos-property ()
+  "Test get-pos-property at intersection boundaries through stack transitions.
+After narrowing to [100,300] then [200,400], the intersection is [200,300].
+After widening, the region should revert to [100,300]."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; First narrowing: [100, 300]
+          (soft-narrow-to-region 100 300)
+          (should-not (get-pos-property 100 'cursor-intangible))
+          (should-not (get-pos-property 300 'cursor-intangible))
+          (should (get-pos-property 301 'cursor-intangible))
+
+          ;; Second narrowing: [200, 400] -> intersection [200, 300]
+          (soft-narrow-to-region 200 400)
+          (should-not (get-pos-property 200 'cursor-intangible))
+          (should-not (get-pos-property 300 'cursor-intangible))
+          (should (get-pos-property 199 'cursor-intangible))
+          (should (get-pos-property 301 'cursor-intangible))
+
+          ;; Widen back to [100, 300]
+          (soft-narrow-widen)
+          (should-not (get-pos-property 100 'cursor-intangible))
+          (should-not (get-pos-property 300 'cursor-intangible))
+          (should (get-pos-property 301 'cursor-intangible)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-end-at-point-max ()
+  "Test get-pos-property when the narrowed region ends at point-max.
+When r == point-max, the after-region is empty and no cursor-intangible
+properties should be set beyond the narrowed region end."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((size (point-max)))
+            (soft-narrow-to-region 200 size)
+
+            ;; Start boundary should not be intangible
+            (should-not (get-pos-property 200 'cursor-intangible))
+            ;; Before start should be intangible
+            (should (get-pos-property 199 'cursor-intangible))
+            ;; End boundary (point-max) should not be intangible
+            (should-not (get-pos-property size 'cursor-intangible))
+            ;; No front-sticky at the end
+            (should-not (get-text-property (max (1- size) (point-min)) 'front-sticky))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
 (provide 'soft-narrow-test)
 
 ;;; soft-narrow-test.el ends here
