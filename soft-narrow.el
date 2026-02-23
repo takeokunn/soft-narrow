@@ -199,6 +199,7 @@ The visible region is the intersection of all narrowed regions.
 
 To widen the region again afterwards use `soft-narrow-widen'."
   (interactive "r")
+  (unless (bound-and-true-p soft-narrow-mode) (soft-narrow-mode 1))
   ;; Validate and normalize bounds
   (let ((start (max (min start end) (point-min)))
         (end (min (max start end) (point-max))))

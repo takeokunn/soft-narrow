@@ -33,7 +33,9 @@ Each line is numbered for easy reference."
     buf))
 
 (defun soft-narrow-test--cleanup-buffer (buf)
-  "Kill buffer BUF if it exists."
+  "Kill buffer BUF if it exists and reset global mode state."
+  (when (bound-and-true-p soft-narrow-mode)
+    (soft-narrow-mode 0))
   (when (buffer-live-p buf)
     (kill-buffer buf)))
 

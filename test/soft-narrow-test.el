@@ -1011,7 +1011,8 @@
   (let ((buf (generate-new-buffer " *soft-narrow-mode-test*")))
     (unwind-protect
         (with-current-buffer buf
-          ;; Initially inactive
+          ;; Ensure mode is off
+          (soft-narrow-mode 0)
           (should-not soft-narrow-mode)
 
           ;; Activate mode
@@ -1065,6 +1066,32 @@
           (soft-narrow-mode 0))
       (when (buffer-live-p buf)
         (kill-buffer buf)))))
+
+(ert-deftest soft-narrow-mode-auto-enable ()
+  "Test that soft-narrow-to-region auto-enables soft-narrow-mode."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Ensure mode is off
+          (soft-narrow-mode 0)
+          (should-not soft-narrow-mode)
+
+          ;; Narrow without mode
+          (soft-narrow-to-region 100 300)
+
+          ;; Mode should be auto-enabled
+          (should soft-narrow-mode)
+
+          ;; And narrowing should work
+          (should (soft-narrow-active-p))
+
+          ;; C-x n w should be bound to soft-narrow-widen
+          (should (eq (key-binding [?\C-x ?n ?w]) 'soft-narrow-widen))
+
+          ;; Clean up
+          (soft-narrow-widen)
+          (soft-narrow-mode 0))
+      (soft-narrow-test--cleanup-buffer buf))))
 
 
 ;; Inverted Intersection Fix Tests
