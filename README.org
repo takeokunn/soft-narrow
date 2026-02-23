@@ -1,0 +1,115 @@
+#+title: soft-narrow
+
+Emacs package to imitate =narrow-to-region= with more eye-candy.
+
+Unlike =narrow-to-region=, which completely hides text outside the narrowed region, this package simply deemphasizes the text, makes it readonly, and makes it unreachable. This leads to a much more natural feeling, where the region stays static (instead of being brutally moved to a blank slate) and is clearly highlighted with respect to the rest of the buffer.
+
+This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-narrow]] by Artur Malabarba, and reimplemented from scratch using modern Emacs 29.1+ APIs.
+
+* Features
+
+- *Zero per-keystroke overhead* — no post-command hooks or function advising
+- *Stackable narrowing* — true intersection semantics for progressive focusing
+- *Pure declarative approach* — uses =invisible=, =cursor-intangible=, and =read-only= text properties
+- *Lightweight* — approximately 100 lines of core logic
+
+* Requirements
+
+- Emacs 29.1 or later
+
+* Installation
+
+Once available on MELPA:
+
+: M-x package-install soft-narrow
+
+You can also download =soft-narrow.el=, open it in Emacs, and use =M-x package-install-from-buffer=.
+
+* Usage
+
+1. Simply call =soft-narrow-to-region= to see it in action. To widen the
+   region again afterwards use =soft-narrow-widen=.
+
+2. If you activate the minor mode (=soft-narrow-mode=), then the
+   standard narrowing keys (=C-x n n=, =C-x n w=, etc) will make use of soft-narrow.
+
+3. You can narrow to multiple regions in sequence.
+   Each successive narrow creates an intersection of all narrowed regions,
+   allowing you to progressively focus on specific parts of your buffer.
+
+** Commands
+
+| Key (with =soft-narrow-mode=) | Command | Description |
+|---+---+---|
+| =C-x n n= | =soft-narrow-to-region= | Narrow to the active region |
+| =C-x n w= | =soft-narrow-widen= | Widen (pop one narrowing level) |
+| =C-x n d= | =soft-narrow-to-defun= | Narrow to the current defun |
+| =C-x n p= | =soft-narrow-to-page= | Narrow to the current page |
+| =C-x n b= | =soft-narrow-org-to-block= | Narrow to org block |
+| =C-x n e= | =soft-narrow-org-to-element= | Narrow to org element |
+| =C-x n s= | =soft-narrow-org-to-subtree= | Narrow to org subtree |
+
+Use =soft-narrow-active-p= to check if soft-narrowing is active in the current buffer.
+
+* Stackable Narrowing
+
+soft-narrow supports stackable narrowing with *true intersection* semantics:
+
+#+begin_src emacs-lisp
+;; Example 1: Overlapping regions
+(soft-narrow-to-region 1 100)   ; Narrow to lines 1-100
+(soft-narrow-to-region 50 150)  ; Further narrow to lines 50-150
+;; Visible region: 50-100 (intersection)
+
+;; Example 2: Widening
+(soft-narrow-widen)  ; Returns to 1-100
+(soft-narrow-widen)  ; Returns to full buffer
+#+end_src
+
+*Non-overlapping regions* create an "inverted intersection":
+#+begin_src emacs-lisp
+(soft-narrow-to-region 100 200)  ; Lines 100-200
+(soft-narrow-to-region 300 400)  ; Lines 300-400 (no overlap)
+;; Result: Entire buffer becomes read-only
+;; This is an edge case to avoid
+#+end_src
+
+* Customization
+
+To customise the face used to deemphasize unreachable text, customise =soft-narrow-blocked-face=.
+
+You can also customise the mode-line lighter via =soft-narrow-lighter= (default: =" *"=).
+
+Note: this is designed for user interaction. For use within Lisp code, the standard =narrow-to-region= is preferable, because soft-narrow is susceptible to =inhibit-read-only= and some corner cases.
+
+* Technical Details
+
+** How It Works
+
+soft-narrow uses Emacs 29.1+ native features:
+- *=invisible= text property*: Hides/de-emphasizes text outside region
+- *=cursor-intangible=*: Automatic motion restriction (no hooks)
+- *=read-only= text property*: Prevents editing outside region
+- *Stackable state*: True intersection of multiple narrowed regions
+
+This approach eliminates all runtime overhead — Emacs handles everything natively.
+
+** Troubleshooting
+
+*Text not hiding as expected:*
+- Ensure =buffer-invisibility-spec= includes ='soft-narrow=
+- Check that =soft-narrow-active-p= returns =t=
+
+*Cursor still moving outside region:*
+- Verify you're using Emacs 29.1+ for =cursor-intangible= support
+- Check =cursor-intangible-mode= is enabled
+
+*Markers behaving unexpectedly:*
+- Markers automatically track insertions/deletions
+- Use =soft-narrow-widen= to reset if state becomes corrupted
+
+* Credits
+
+This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-narrow]] by Artur Malabarba. All code has been rewritten from scratch using modern Emacs 29.1+ APIs, with no code shared with the original package.
+
+Licensed under the GNU General Public License v2 or later. See the =LICENSE= file for details.
