@@ -247,7 +247,7 @@ Binds that are replaced are:
 Stackable Narrowing:
 Successive narrowing creates intersection of all narrowed regions.
 Use `soft-narrow-widen' to pop back to previous narrow levels."
-  :lighter soft-narrow-lighter
+  :lighter (:eval (when (soft-narrow-active-p) soft-narrow-lighter))
   :keymap '(("\C-xnb" . soft-narrow-org-to-block)
             ("\C-xnd" . soft-narrow-to-defun)
             ("\C-xne" . soft-narrow-org-to-element)
@@ -255,8 +255,13 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
             ("\C-xnp" . soft-narrow-to-page)
             ("\C-xns" . soft-narrow-org-to-subtree)
             ("\C-xnw" . soft-narrow-widen))
-  :global nil
-  :group 'soft-narrow)
+  :global t
+  :group 'soft-narrow
+  (unless soft-narrow-mode
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (while (soft-narrow-active-p)
+          (soft-narrow-widen))))))
 
 (defface soft-narrow-blocked-face
   '((((background light)) :foreground "Grey70")
