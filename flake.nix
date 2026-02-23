@@ -18,19 +18,59 @@
           ];
 
           shellHook = ''
+            make autoloads 2>/dev/null
+
             echo "soft-narrow development environment loaded"
             echo "  emacs: $(emacs --version | head -1)"
             echo ""
-            echo "Available commands:"
-            echo "  make compile       Byte-compile all source files"
-            echo "  make test          Run ERT tests"
-            echo "  make lint          Run checkdoc"
-            echo "  make package-lint  Run package-lint"
-            echo "  nix flake check    Run all checks"
+            echo "=== Automated checks ==="
+            echo "  make compile            Byte-compile with warnings as errors"
+            echo "  make test               Run ERT test suite"
+            echo "  make lint               Run checkdoc"
+            echo "  make package-lint       Run package-lint"
+            echo "  nix run .#compile       Byte-compile (standalone)"
+            echo "  nix run .#test          Run tests (standalone)"
+            echo "  nix run .#lint          Run checkdoc (standalone)"
+            echo "  nix run .#package-lint  Run package-lint (standalone)"
+            echo "  nix flake check         Run all checks (sandboxed)"
+            echo ""
+            echo "=== Manual testing ==="
+            echo "  emacs -Q -L . -l soft-narrow-autoloads --eval '(soft-narrow-mode 1)' example/sample.el"
+            echo "    1. C-x n d         Narrow to defun at point"
+            echo "    2. C-x n w         Widen back"
+            echo "    3. Select region -> C-x n n  Narrow to region"
+            echo "    4. C-x n w         Widen back"
+            echo ""
+            echo "  emacs -Q -L . -l soft-narrow-autoloads --eval '(soft-narrow-mode 1)' example/sample.org"
+            echo "    1. C-x n s         Narrow to org subtree"
+            echo "    2. C-x n e         Narrow to org element"
+            echo "    3. C-x n b         Narrow to org block (inside src block)"
+            echo "    4. C-x n w         Widen (stackable, repeat to fully widen)"
             echo ""
           '';
         };
       });
+
+      apps = eachSystem (pkgs:
+        let
+          emacs = pkgs.emacs;
+          emacsWithPkgLint = (pkgs.emacsPackagesFor emacs).emacsWithPackages (epkgs: [
+            epkgs.package-lint
+          ]);
+          make = "${pkgs.gnumake}/bin/make";
+          mkApp = emacsPkg: target: {
+            type = "app";
+            program = toString (pkgs.writeShellScript "soft-narrow-${target}" ''
+              EMACS=${pkgs.lib.getExe emacsPkg} ${make} ${target}
+            '');
+          };
+        in
+        {
+          compile = mkApp emacs "compile";
+          test = mkApp emacs "test";
+          lint = mkApp emacs "lint";
+          package-lint = mkApp emacsWithPkgLint "package-lint";
+        });
 
       checks = eachSystem (pkgs:
         let

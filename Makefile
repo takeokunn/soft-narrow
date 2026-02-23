@@ -5,11 +5,15 @@ LOAD_PATH = -L . -L test
 SRC = soft-narrow.el
 TEST_SRC = test/soft-narrow-test.el
 
-PACKAGE_INIT = --eval "(progn (require 'package) (push '(\"melpa\" . \"https://melpa.org/packages/\") package-archives) (package-initialize))"
+PACKAGE_INIT = --eval "(progn (require 'package) (push '(\"melpa\" . \"https://melpa.org/packages/\") package-archives) (package-initialize) (unless (package-installed-p 'package-lint) (package-refresh-contents) (package-install 'package-lint)))"
 
-.PHONY: all compile test lint package-lint clean
+.PHONY: all compile test lint package-lint autoloads clean
 
 all: compile
+
+autoloads:
+	$(BATCH) $(LOAD_PATH) \
+	  --eval "(loaddefs-generate \".\" \"soft-narrow-autoloads.el\")"
 
 compile:
 	$(BATCH) $(LOAD_PATH) \
@@ -32,4 +36,4 @@ package-lint:
 	  -f package-lint-batch-and-exit $(SRC)
 
 clean:
-	rm -f *.elc test/*.elc
+	rm -f *.elc test/*.elc soft-narrow-autoloads.el

@@ -1,4 +1,5 @@
 *.elc
+soft-narrow-autoloads.el
 *~
 *.~undo-tree~
 .#*
