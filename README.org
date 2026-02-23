@@ -1,5 +1,7 @@
 #+title: soft-narrow
 
+[[https://github.com/takeokunn/soft-narrow/actions/workflows/ci.yml][file:https://github.com/takeokunn/soft-narrow/actions/workflows/ci.yml/badge.svg]]
+
 Emacs package to imitate =narrow-to-region= with more eye-candy.
 
 Unlike =narrow-to-region=, which completely hides text outside the narrowed region, this package simply deemphasizes the text, makes it readonly, and makes it unreachable. This leads to a much more natural feeling, where the region stays static (instead of being brutally moved to a blank slate) and is clearly highlighted with respect to the rest of the buffer.
@@ -11,27 +13,43 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 - *Zero per-keystroke overhead* — no post-command hooks or function advising
 - *Stackable narrowing* — true intersection semantics for progressive focusing
 - *Pure declarative approach* — uses overlays for visual deemphasis, =cursor-intangible= and =read-only= text properties for behavior
-- *Lightweight* — approximately 100 lines of core logic
+- *Lightweight* — single-file implementation (~400 lines including org-mode integrations)
 
-* Requirements
+* Prerequisites
 
-- Emacs 29.1 or later
+- Emacs 29.1+
 
 * Installation
 
-Once available on MELPA:
+** leaf
 
-: M-x package-install soft-narrow
+#+begin_src emacs-lisp
+(leaf soft-narrow
+  :vc (:url "https://github.com/takeokunn/soft-narrow")
+  :global-minor-mode t)
+#+end_src
 
-You can also download =soft-narrow.el=, open it in Emacs, and use =M-x package-install-from-buffer=.
+** Manual
+
+Clone this repository and add it to your =load-path=:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/soft-narrow")
+(require 'soft-narrow)
+#+end_src
+
+Or download =soft-narrow.el=, open it in Emacs, and use =M-x package-install-from-buffer=.
 
 * Usage
+
+See the [[file:example/][example/]] directory for working examples.
 
 1. Simply call =soft-narrow-to-region= to see it in action. To widen the
    region again afterwards use =soft-narrow-widen=.
 
-2. If you activate the minor mode (=soft-narrow-mode=), then the
+2. If you activate the global minor mode (=soft-narrow-mode=), then the
    standard narrowing keys (=C-x n n=, =C-x n w=, etc) will make use of soft-narrow.
+   Disabling the mode automatically widens all narrowed buffers.
 
 3. You can narrow to multiple regions in sequence.
    Each successive narrow creates an intersection of all narrowed regions,
@@ -76,9 +94,8 @@ soft-narrow supports stackable narrowing with *true intersection* semantics:
 
 * Customization
 
-To customise the face used to deemphasize unreachable text, customise =soft-narrow-blocked-face=.
-
-You can also customise the mode-line lighter via =soft-narrow-lighter= (default: =" *"=).
+- =soft-narrow-blocked-face= -- Face used to deemphasize unreachable text
+- =soft-narrow-lighter= -- Mode-line lighter while narrowing is active (default: =" *"=)
 
 Note: this is designed for user interaction. For use within Lisp code, the standard =narrow-to-region= is preferable, because soft-narrow is susceptible to =inhibit-read-only= and some corner cases.
 
@@ -90,7 +107,8 @@ soft-narrow uses Emacs 29.1+ native features:
 - *Overlays with =face= property*: Visually deemphasizes text outside the narrowed region (greyed out)
 - *=cursor-intangible=*: Automatic motion restriction (no hooks)
 - *=read-only= text property*: Prevents editing outside region
-- *Stackable state*: True intersection of multiple narrowed regions
+- *Stickiness properties*: =front-sticky= / =rear-nonsticky= on =cursor-intangible= applied to the before-region only, preventing boundary flickering (workaround for Emacs Bug#51095). The after-region intentionally omits =front-sticky= so the cursor can rest at the exact end boundary of the narrowed region.
+- *Stackable state*: True intersection of multiple narrowed regions via marker-based LIFO stack
 
 This approach eliminates all runtime overhead — Emacs handles everything natively.
 
@@ -108,8 +126,16 @@ This approach eliminates all runtime overhead — Emacs handles everything nativ
 - Markers automatically track insertions/deletions
 - Use =soft-narrow-widen= to reset if state becomes corrupted
 
-* Credits
+* Development
 
-This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-narrow]] by Artur Malabarba. All code has been rewritten from scratch using modern Emacs 29.1+ APIs, with no code shared with the original package.
+#+begin_src shell
+make compile       # Byte-compile soft-narrow.el
+make test          # Run ERT tests
+make lint          # Run checkdoc
+make package-lint  # Run package-lint
+nix flake check    # Run all checks via Nix
+#+end_src
 
-Licensed under the GNU General Public License v2 or later. See the =LICENSE= file for details.
+* License
+
+GPL-3.0+. See [[file:LICENSE][LICENSE]].
