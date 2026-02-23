@@ -10,7 +10,7 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 
 - *Zero per-keystroke overhead* — no post-command hooks or function advising
 - *Stackable narrowing* — true intersection semantics for progressive focusing
-- *Pure declarative approach* — uses =invisible=, =cursor-intangible=, and =read-only= text properties
+- *Pure declarative approach* — uses overlays for visual deemphasis, =cursor-intangible= and =read-only= text properties for behavior
 - *Lightweight* — approximately 100 lines of core logic
 
 * Requirements
@@ -87,7 +87,7 @@ Note: this is designed for user interaction. For use within Lisp code, the stand
 ** How It Works
 
 soft-narrow uses Emacs 29.1+ native features:
-- *=invisible= text property*: Hides/de-emphasizes text outside region
+- *Overlays with =face= property*: Visually deemphasizes text outside the narrowed region (greyed out)
 - *=cursor-intangible=*: Automatic motion restriction (no hooks)
 - *=read-only= text property*: Prevents editing outside region
 - *Stackable state*: True intersection of multiple narrowed regions
@@ -96,9 +96,9 @@ This approach eliminates all runtime overhead — Emacs handles everything nativ
 
 ** Troubleshooting
 
-*Text not hiding as expected:*
-- Ensure =buffer-invisibility-spec= includes ='soft-narrow=
+*Text not greyed out as expected:*
 - Check that =soft-narrow-active-p= returns =t=
+- Verify overlays exist with =M-x describe-text-properties= on blocked text
 
 *Cursor still moving outside region:*
 - Verify you're using Emacs 29.1+ for =cursor-intangible= support
