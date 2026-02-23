@@ -104,6 +104,9 @@ Please include your Emacs and soft-narrow versions."
   "Stack of narrowing frames for LIFO semantics.
 Each frame is a cons (START-MARKER . END-MARKER).")
 
+(defvar-local soft-narrow--overlays nil
+  "List of overlays for face properties in blocked regions.")
+
 ;;;###autoload
 (defun soft-narrow-active-p ()
   "Return non-nil if the current buffer is soft-narrowed."
@@ -125,43 +128,54 @@ Return (START . END) for valid intersection, or nil if no valid intersection."
             (throw 'invalid nil)))
         (cons max-start min-end)))))
 
+(defun soft-narrow--delete-overlays ()
+  "Delete all soft-narrow overlays and clear the list."
+  (mapc #'delete-overlay soft-narrow--overlays)
+  (setq soft-narrow--overlays nil))
+
+(defun soft-narrow--create-overlays (start end)
+  "Create overlays for blocked regions outside START..END.
+Overlays carry only the `face' property for visual deemphasis."
+  (when (> start (point-min))
+    (let ((ov (make-overlay (point-min) start nil nil nil)))
+      (overlay-put ov 'face 'soft-narrow-blocked-face)
+      (overlay-put ov 'soft-narrow t)
+      (push ov soft-narrow--overlays)))
+  (when (< end (point-max))
+    (let ((ov (make-overlay end (point-max) nil nil t)))
+      (overlay-put ov 'face 'soft-narrow-blocked-face)
+      (overlay-put ov 'soft-narrow t)
+      (push ov soft-narrow--overlays))))
+
 (defun soft-narrow--apply-properties ()
-  "Apply narrowing properties based on current intersection."
+  "Apply narrowing properties based on current intersection.
+Blocked regions get overlay face for visual deemphasis, plus
+text properties for cursor restriction and read-only protection."
+  (soft-narrow--delete-overlays)
   (let ((intersection (soft-narrow--compute-intersection)))
     (if intersection
         (let ((l (car intersection))
               (r (cdr intersection)))
-          ;; Ensure cursor-intangible-mode is enabled for cursor-intangible property
           (when (fboundp 'cursor-intangible-mode)
             (unless (bound-and-true-p cursor-intangible-mode)
               (cursor-intangible-mode 1)))
-          ;; Add to invisibility spec
-          (when (eq buffer-invisibility-spec t)
-            (setq buffer-invisibility-spec nil))
-          (add-to-list 'buffer-invisibility-spec '(soft-narrow . t))
           (with-silent-modifications
-            ;; Clear old properties first
             (remove-list-of-text-properties
              (point-min) (point-max)
-             '(invisible cursor-intangible read-only font-lock-face))
-            ;; Apply properties to blocked regions
+             '(cursor-intangible read-only front-sticky rear-nonsticky))
             (add-text-properties (point-min) l
-                                 '(invisible soft-narrow
-                                   cursor-intangible t
-                                   read-only t
-                                   font-lock-face soft-narrow-blocked-face))
+                                 '(cursor-intangible t read-only t
+                                   rear-nonsticky (cursor-intangible)
+                                   front-sticky (cursor-intangible)))
             (add-text-properties r (point-max)
-                                 '(invisible soft-narrow
-                                   cursor-intangible t
-                                   read-only t
-                                   font-lock-face soft-narrow-blocked-face))))
+                                 '(cursor-intangible t read-only t
+                                   front-sticky (cursor-intangible))))
+          (soft-narrow--create-overlays l r))
       ;; No valid intersection - clear all properties
       (with-silent-modifications
         (remove-list-of-text-properties
          (point-min) (point-max)
-         '(invisible cursor-intangible read-only font-lock-face))
-        (setq buffer-invisibility-spec
-              (assq-delete-all 'soft-narrow buffer-invisibility-spec))
+         '(cursor-intangible read-only front-sticky rear-nonsticky))
         (when (bound-and-true-p cursor-intangible-mode)
           (cursor-intangible-mode -1))))))
 
@@ -206,13 +220,7 @@ If no narrowing is active, this function does nothing harmlessly."
     (let ((frame (pop soft-narrow--stack)))
       ;; Clean up markers from removed frame
       (set-marker (car frame) nil)
-      (set-marker (cdr frame) nil)
-      (when (null soft-narrow--stack)
-        ;; Stack is now empty, clean up buffer-invisibility-spec
-        (setq buffer-invisibility-spec
-              (assq-delete-all 'soft-narrow buffer-invisibility-spec))
-        (when (bound-and-true-p cursor-intangible-mode)
-          (cursor-intangible-mode -1)))))
+      (set-marker (cdr frame) nil)))
   ;; Reapply properties based on new stack state
   (soft-narrow--apply-properties))
 

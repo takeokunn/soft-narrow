@@ -20,13 +20,13 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (defun soft-narrow-test--create-test-buffer (lines)
   "Create a temporary buffer with LINES lines of test content.
 Each line is numbered for easy reference."
   (let ((buf (generate-new-buffer " *soft-narrow-test*")))
     (with-current-buffer buf
-      ;; Initialize buffer-invisibility-spec to a list instead of t
-      (setq buffer-invisibility-spec ())
       (erase-buffer)
       (dotimes (i lines)
         (insert (format "Line %d: Test content\n" (1+ i)))))
@@ -37,15 +37,12 @@ Each line is numbered for easy reference."
   (when (buffer-live-p buf)
     (kill-buffer buf)))
 
-(defun soft-narrow-test--count-invisible-chars (start end)
-  "Count characters with invisible property between START and END."
-  (let ((count 0)
-        (pos start))
-    (while (< pos end)
-      (when (eq (get-text-property pos 'invisible) 'soft-narrow)
-        (setq count (1+ count)))
-      (setq pos (1+ pos)))
-    count))
+(defun soft-narrow-test--has-overlay-face-at (pos face)
+  "Return non-nil if position POS has an overlay with FACE."
+  (cl-some (lambda (ov)
+             (and (overlay-get ov 'soft-narrow)
+                  (eq (overlay-get ov 'face) face)))
+           (overlays-at pos)))
 
 (provide 'soft-narrow-test-helpers)
 

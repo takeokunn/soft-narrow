@@ -74,14 +74,14 @@
         (with-current-buffer buf
           (soft-narrow-to-region 200 400)
 
-          ;; Check invisible property before region
-          (should (eq (get-text-property 50 'invisible) 'soft-narrow))
+          ;; Check overlay face before region
+          (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face))
 
-          ;; Check invisible property after region
-          (should (eq (get-text-property 500 'invisible) 'soft-narrow))
+          ;; Check overlay face after region
+          (should (soft-narrow-test--has-overlay-face-at 500 'soft-narrow-blocked-face))
 
-          ;; Check no invisible inside region
-          (should-not (eq (get-text-property 300 'invisible) 'soft-narrow))
+          ;; Check no overlay inside region
+          (should-not (soft-narrow-test--has-overlay-face-at 300 'soft-narrow-blocked-face))
 
           ;; Check read-only property before region
           (should (get-text-property 50 'read-only))
@@ -101,28 +101,24 @@
           ;; Check no cursor-intangible inside region
           (should-not (get-text-property 300 'cursor-intangible))
 
-          ;; Check face property
-          (should (eq (get-text-property 50 'font-lock-face)
-                      'soft-narrow-blocked-face)))
+          ;; Check face property (now on overlay, not text property)
+          (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-invisibility-spec ()
-  "Test that buffer-invisibility-spec is set correctly."
+  "Test that buffer-invisibility-spec is not modified."
   (let ((buf (soft-narrow-test--create-test-buffer 100)))
     (unwind-protect
         (with-current-buffer buf
-          ;; Initially not in invisibility spec
-          (should-not (assq 'soft-narrow buffer-invisibility-spec))
+          (let ((original-spec buffer-invisibility-spec))
+            (soft-narrow-to-region 200 400)
 
-          (soft-narrow-to-region 200 400)
+            ;; Should NOT modify buffer-invisibility-spec
+            (should (equal buffer-invisibility-spec original-spec))
 
-          ;; Should be in invisibility spec now
-          (should (assq 'soft-narrow buffer-invisibility-spec))
+            (soft-narrow-widen)
 
-          (soft-narrow-widen)
-
-          ;; Should be removed after widen
-          (should-not (assq 'soft-narrow buffer-invisibility-spec)))
+            (should (equal buffer-invisibility-spec original-spec))))
       (soft-narrow-test--cleanup-buffer buf))))
 
 
@@ -146,10 +142,10 @@
             (should (= (car intersection) 200))
             (should (= (cdr intersection) 300)))
 
-          ;; Check that only intersection is visible
-          (should (eq (get-text-property 150 'invisible) 'soft-narrow))
-          (should-not (eq (get-text-property 250 'invisible) 'soft-narrow))
-          (should (eq (get-text-property 350 'invisible) 'soft-narrow)))
+          ;; Check that only intersection is visible (overlay check)
+          (should (soft-narrow-test--has-overlay-face-at 150 'soft-narrow-blocked-face))
+          (should-not (soft-narrow-test--has-overlay-face-at 250 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 350 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-lifo-widen ()
@@ -371,17 +367,15 @@
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-invisibility-spec-t ()
-  "Test that buffer-invisibility-spec being t is handled correctly."
+  "Test that buffer-invisibility-spec t is not disrupted."
   (let ((buf (soft-narrow-test--create-test-buffer 10)))
     (unwind-protect
         (with-current-buffer buf
-          ;; Simulate buffer-invisibility-spec being t
           (setq-local buffer-invisibility-spec t)
           (soft-narrow-to-region 20 60)
 
-          ;; Should have converted t to list with soft-narrow entry
-          (should (listp buffer-invisibility-spec))
-          (should (assq 'soft-narrow buffer-invisibility-spec))
+          ;; Should not have modified buffer-invisibility-spec
+          (should (eq buffer-invisibility-spec t))
 
           (soft-narrow-widen))
       (soft-narrow-test--cleanup-buffer buf))))
@@ -397,9 +391,9 @@
             ;; Should be narrowed
             (should (soft-narrow-active-p))
 
-            ;; No text should be invisible (intersection covers entire buffer)
-            ;; Note: put-text-property with start=end does nothing, so no invisible text
-            (should (= (soft-narrow-test--count-invisible-chars 1 size) 0))
+            ;; No overlays should be in the region (entire buffer is narrowed)
+            ;; Since start=point-min and end=point-max, no blocked regions exist
+            (should-not (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
 
             ;; No text should be read-only inside the buffer
             ;; Check a few positions
@@ -418,9 +412,9 @@
           ;; Should be narrowed
           (should (soft-narrow-active-p))
 
-          ;; Everything should be invisible except point 200
-          (should (eq (get-text-property 1 'invisible) 'soft-narrow))
-          (should (eq (get-text-property 300 'invisible) 'soft-narrow))
+          ;; Everything should have overlay face (entire buffer is blocked)
+          (should (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 300 'soft-narrow-blocked-face))
 
           ;; Everything should be read-only
           (should (get-text-property 1 'read-only))
@@ -528,17 +522,16 @@
           (soft-narrow-to-region 200 400)
 
           ;; Verify properties are set
-          (should (eq (get-text-property 100 'invisible) 'soft-narrow))
+          (should (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
           (should (get-text-property 100 'read-only))
           (should (get-text-property 100 'cursor-intangible))
 
           (soft-narrow-widen)
 
           ;; Verify all properties are removed
-          (should-not (get-text-property 100 'invisible))
+          (should-not (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
           (should-not (get-text-property 100 'read-only))
-          (should-not (get-text-property 100 'cursor-intangible))
-          (should-not (get-text-property 100 'font-lock-face)))
+          (should-not (get-text-property 100 'cursor-intangible)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 
@@ -682,14 +675,14 @@
             ;; Should be narrowed
             (should (soft-narrow-active-p))
 
-            ;; Text before block should be invisible
-            (should (eq (get-text-property 1 'invisible) 'soft-narrow))
+            ;; Text before block should have overlay face
+            (should (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face))
 
-            ;; Text after block should be invisible
-            (should (eq (get-text-property (1- (point-max)) 'invisible) 'soft-narrow))
+            ;; Text after block should have overlay face
+            (should (soft-narrow-test--has-overlay-face-at (1- (point-max)) 'soft-narrow-blocked-face))
 
-            ;; Text inside block should be visible
-            (should-not (eq (get-text-property 50 'invisible) 'soft-narrow)))
+            ;; Text inside block should not have overlay face
+            (should-not (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face)))
         (when (buffer-live-p buf)
           (kill-buffer buf))))))
 
@@ -765,9 +758,9 @@
             ;; Should be narrowed
             (should (soft-narrow-active-p))
 
-            ;; First paragraph should be invisible
+            ;; First paragraph should have overlay face
             (goto-char 1)
-            (should (eq (get-text-property 1 'invisible) 'soft-narrow)))
+            (should (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face)))
         (when (buffer-live-p buf)
           (kill-buffer buf))))))
 
@@ -796,7 +789,7 @@
 
             ;; Should narrow to contents, not including markers
             (goto-char 1)
-            (should (eq (get-text-property 1 'invisible) 'soft-narrow)))
+            (should (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face)))
         (when (buffer-live-p buf)
           (kill-buffer buf))))))
 
@@ -927,10 +920,10 @@
           ;; Should be narrowed
           (should (soft-narrow-active-p))
 
-          ;; Second function should be invisible
+          ;; Second function should have overlay face
           (goto-char (point-max))
           (forward-line -2)
-          (should (eq (get-text-property (point) 'invisible) 'soft-narrow)))
+          (should (soft-narrow-test--has-overlay-face-at (point) 'soft-narrow-blocked-face)))
       (when (buffer-live-p buf)
         (kill-buffer buf)))))
 
@@ -979,9 +972,9 @@
           ;; Should be narrowed
           (should (soft-narrow-active-p))
 
-          ;; Page 1 should be invisible
+          ;; Page 1 should have overlay face
           (goto-char 1)
-          (should (eq (get-text-property 1 'invisible) 'soft-narrow)))
+          (should (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face)))
       (when (buffer-live-p buf)
         (kill-buffer buf)))))
 
@@ -1004,9 +997,9 @@
           ;; Should be narrowed to page 2
           (should (soft-narrow-active-p))
 
-          ;; Page 1 should be invisible
+          ;; Page 1 should have overlay face
           (goto-char 1)
-          (should (eq (get-text-property 1 'invisible) 'soft-narrow)))
+          (should (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face)))
       (when (buffer-live-p buf)
         (kill-buffer buf)))))
 
@@ -1132,14 +1125,14 @@
 
           (should (soft-narrow-active-p))
 
-          ;; Nothing should be invisible before the region
+          ;; Nothing should have overlay face before the region
           ;; because we start at point-min
           (goto-char 1)
-          (should-not (eq (get-text-property 1 'invisible) 'soft-narrow))
+          (should-not (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face))
 
-          ;; Text after region should be invisible
+          ;; Text after region should have overlay face
           (goto-char 500)
-          (should (eq (get-text-property 500 'invisible) 'soft-narrow)))
+          (should (soft-narrow-test--has-overlay-face-at 500 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-boundary-buffer-end ()
@@ -1152,14 +1145,14 @@
 
             (should (soft-narrow-active-p))
 
-            ;; Text before region should be invisible
+            ;; Text before region should have overlay face
             (goto-char 100)
-            (should (eq (get-text-property 100 'invisible) 'soft-narrow))
+            (should (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
 
-            ;; Nothing should be invisible after region
+            ;; Nothing should have overlay face after region
             ;; because we end at point-max
             (goto-char size)
-            (should-not (eq (get-text-property size 'invisible) 'soft-narrow))))
+            (should-not (soft-narrow-test--has-overlay-face-at size 'soft-narrow-blocked-face))))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-boundary-zero-length ()
@@ -1172,10 +1165,10 @@
 
           (should (soft-narrow-active-p))
 
-          ;; Everything should be blocked for a zero-length region
-          (should (eq (get-text-property 100 'invisible) 'soft-narrow))
-          (should (eq (get-text-property 400 'invisible) 'soft-narrow))
-          (should (eq (get-text-property 250 'invisible) 'soft-narrow)))
+          ;; Everything should have overlay face for a zero-length region
+          (should (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 400 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 250 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-boundary-very-small-region ()
@@ -1187,14 +1180,14 @@
 
           (should (soft-narrow-active-p))
 
-          ;; Position 250 should be visible
-          (should-not (eq (get-text-property 250 'invisible) 'soft-narrow))
+          ;; Position 250 should not have overlay face (inside region)
+          (should-not (soft-narrow-test--has-overlay-face-at 250 'soft-narrow-blocked-face))
 
-          ;; Position 251 and beyond should be invisible
-          (should (eq (get-text-property 251 'invisible) 'soft-narrow))
+          ;; Position 251 and beyond should have overlay face
+          (should (soft-narrow-test--has-overlay-face-at 251 'soft-narrow-blocked-face))
 
-          ;; Position 249 and before should be invisible
-          (should (eq (get-text-property 249 'invisible) 'soft-narrow)))
+          ;; Position 249 and before should have overlay face
+          (should (soft-narrow-test--has-overlay-face-at 249 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-boundary-point-min-max ()
@@ -1206,10 +1199,10 @@
 
           (should (soft-narrow-active-p))
 
-          ;; No text should be invisible
-          (should-not (eq (get-text-property 1 'invisible) 'soft-narrow))
-          (should-not (eq (get-text-property 500 'invisible) 'soft-narrow))
-          (should-not (eq (get-text-property (point-max) 'invisible) 'soft-narrow)))
+          ;; No overlay face should be present (entire buffer narrowed)
+          (should-not (soft-narrow-test--has-overlay-face-at 1 'soft-narrow-blocked-face))
+          (should-not (soft-narrow-test--has-overlay-face-at 500 'soft-narrow-blocked-face))
+          (should-not (soft-narrow-test--has-overlay-face-at (point-max) 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 
@@ -1419,6 +1412,154 @@
       (insert-file-contents source-file)
       (goto-char (point-min))
       (should-not (re-search-forward "^(eval " nil t)))))
+
+
+;; Overlay and Display Mode Tests
+
+(ert-deftest soft-narrow-overlay-creation ()
+  "Test that overlays are created in blocked regions."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Should have overlays in blocked regions
+          (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 500 'soft-narrow-blocked-face))
+
+          ;; Should NOT have overlay inside narrowed region
+          (should-not (soft-narrow-test--has-overlay-face-at 300 'soft-narrow-blocked-face)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-overlay-cleanup-on-widen ()
+  "Test that overlays are removed on widen."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Overlays exist
+          (should soft-narrow--overlays)
+
+          (soft-narrow-widen)
+
+          ;; Overlays should be cleaned up
+          (should-not soft-narrow--overlays)
+          (should-not (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-overlay-recreation-on-stack ()
+  "Test that overlays are recreated on push/pop."
+  (let ((buf (soft-narrow-test--create-test-buffer 200)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; First narrow: 100-300
+          (soft-narrow-to-region 100 300)
+          (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 350 'soft-narrow-blocked-face))
+
+          ;; Second narrow: 200-400 (intersection: 200-300)
+          (soft-narrow-to-region 200 400)
+          ;; Before-overlay should cover up to 200 now
+          (should (soft-narrow-test--has-overlay-face-at 150 'soft-narrow-blocked-face))
+          ;; After-overlay should cover from 300
+          (should (soft-narrow-test--has-overlay-face-at 350 'soft-narrow-blocked-face))
+          ;; Inside intersection should have no overlay
+          (should-not (soft-narrow-test--has-overlay-face-at 250 'soft-narrow-blocked-face))
+
+          ;; Pop one level
+          (soft-narrow-widen)
+          ;; Now overlays should reflect 100-300 again
+          (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face))
+          (should (soft-narrow-test--has-overlay-face-at 350 'soft-narrow-blocked-face))
+          (should-not (soft-narrow-test--has-overlay-face-at 200 'soft-narrow-blocked-face)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-overlay-tagged ()
+  "Test that overlays are tagged with soft-narrow property."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Check overlay has soft-narrow tag
+          (let ((ovs (overlays-at 50)))
+            (should (cl-some (lambda (ov) (overlay-get ov 'soft-narrow)) ovs))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
+;; Stickiness and Boundary Tests
+
+(ert-deftest soft-narrow-stickiness-before-region ()
+  "Test that rear-nonsticky is set on the before-region blocked text."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Before-region should have rear-nonsticky for cursor-intangible
+          (let ((nonsticky (get-text-property 100 'rear-nonsticky)))
+            (should (memq 'cursor-intangible nonsticky))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-stickiness-after-region ()
+  "Test that front-sticky is set on the after-region blocked text."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; After-region should have front-sticky for cursor-intangible
+          (let ((sticky (get-text-property 500 'front-sticky)))
+            (should (memq 'cursor-intangible sticky))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-stickiness-not-inside-region ()
+  "Test that stickiness properties are not set inside the narrowed region."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Inside region should have no stickiness properties
+          (should-not (get-text-property 300 'front-sticky))
+          (should-not (get-text-property 300 'rear-nonsticky)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-stickiness-cleanup-on-widen ()
+  "Test that stickiness properties are removed after final widen."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Verify stickiness properties exist
+          (should (get-text-property 100 'rear-nonsticky))
+          (should (get-text-property 500 'front-sticky))
+
+          (soft-narrow-widen)
+
+          ;; After widen, all stickiness properties should be gone
+          (should-not (get-text-property 100 'rear-nonsticky))
+          (should-not (get-text-property 500 'front-sticky)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-intangible-exact ()
+  "Test cursor-intangible boundaries are exact at narrowed region edges."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          ;; Position 199 (last char before region) should be intangible
+          (should (get-text-property 199 'cursor-intangible))
+          ;; Position 200 (first char of region) should NOT be intangible
+          (should-not (get-text-property 200 'cursor-intangible))
+          ;; Position 399 (last char of region) should NOT be intangible
+          (should-not (get-text-property 399 'cursor-intangible))
+          ;; Position 400 (first char after region) should be intangible
+          (should (get-text-property 400 'cursor-intangible)))
+      (soft-narrow-test--cleanup-buffer buf))))
 
 (provide 'soft-narrow-test)
 
