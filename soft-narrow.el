@@ -117,16 +117,17 @@ Each frame is a cons (START-MARKER . END-MARKER).")
   "Compute intersection of all frames in the narrowing stack.
 Return (START . END) for valid intersection, or nil if no valid intersection."
   (when soft-narrow--stack
-    (let* ((first (car soft-narrow--stack))
-           (max-start (marker-position (car first)))
-           (min-end (marker-position (cdr first))))
-      (catch 'invalid
-        (dolist (frame (cdr soft-narrow--stack))
-          (setq max-start (max max-start (marker-position (car frame)))
-                min-end (min min-end (marker-position (cdr frame))))
-          (when (>= max-start min-end)
-            (throw 'invalid nil)))
-        (cons max-start min-end)))))
+    (let ((first (car soft-narrow--stack)))
+      (named-let loop ((frames (cdr soft-narrow--stack))
+                       (max-start (marker-position (car first)))
+                       (min-end (marker-position (cdr first))))
+        (if (null frames)
+            (cons max-start min-end)
+          (let ((new-start (max max-start (marker-position (car (car frames)))))
+                (new-end (min min-end (marker-position (cdr (car frames))))))
+            (if (>= new-start new-end)
+                nil
+              (loop (cdr frames) new-start new-end))))))))
 
 (defun soft-narrow--delete-overlays ()
   "Delete all soft-narrow overlays and clear the list."
@@ -152,32 +153,32 @@ Overlays carry only the `face' property for visual deemphasis."
 Blocked regions get overlay face for visual deemphasis, plus
 text properties for cursor restriction and read-only protection."
   (soft-narrow--delete-overlays)
-  (let ((intersection (soft-narrow--compute-intersection)))
-    (if intersection
-        (let ((l (car intersection))
-              (r (cdr intersection)))
-          (when (fboundp 'cursor-intangible-mode)
-            (unless (bound-and-true-p cursor-intangible-mode)
-              (cursor-intangible-mode 1)))
-          (with-silent-modifications
-            (remove-list-of-text-properties
-             (point-min) (point-max)
-             '(cursor-intangible read-only front-sticky rear-nonsticky))
-            (add-text-properties (point-min) l
-                                 '(cursor-intangible t read-only t
-                                   rear-nonsticky (cursor-intangible)
-                                   front-sticky (cursor-intangible)))
-            (add-text-properties r (point-max)
-                                 '(cursor-intangible t read-only t
-                                   front-sticky (cursor-intangible))))
-          (soft-narrow--create-overlays l r))
-      ;; No valid intersection - clear all properties
-      (with-silent-modifications
-        (remove-list-of-text-properties
-         (point-min) (point-max)
-         '(cursor-intangible read-only front-sticky rear-nonsticky))
-        (when (bound-and-true-p cursor-intangible-mode)
-          (cursor-intangible-mode -1))))))
+  (if-let* ((intersection (soft-narrow--compute-intersection))
+             (l (car intersection))
+             (r (cdr intersection)))
+      (progn
+        (when (fboundp 'cursor-intangible-mode)
+          (unless (bound-and-true-p cursor-intangible-mode)
+            (cursor-intangible-mode 1)))
+        (with-silent-modifications
+          (remove-list-of-text-properties
+           (point-min) (point-max)
+           '(cursor-intangible read-only front-sticky rear-nonsticky))
+          (add-text-properties (point-min) l
+                               '(cursor-intangible t read-only t
+                                 rear-nonsticky (cursor-intangible)
+                                 front-sticky (cursor-intangible)))
+          (add-text-properties r (point-max)
+                               '(cursor-intangible t read-only t
+                                 front-sticky (cursor-intangible))))
+        (soft-narrow--create-overlays l r))
+    ;; No valid intersection - clear all properties
+    (with-silent-modifications
+      (remove-list-of-text-properties
+       (point-min) (point-max)
+       '(cursor-intangible read-only front-sticky rear-nonsticky))
+      (when (bound-and-true-p cursor-intangible-mode)
+        (cursor-intangible-mode -1)))))
 
 ;;;###autoload
 (defun soft-narrow-to-region (start end)
@@ -231,6 +232,16 @@ If no narrowing is active, this function does nothing harmlessly."
   :group 'soft-narrow
   :package-version '(soft-narrow . "2.0.0"))
 
+(defvar-keymap soft-narrow-mode-map
+  :doc "Keymap for `soft-narrow-mode'."
+  "C-x n b" #'soft-narrow-org-to-block
+  "C-x n d" #'soft-narrow-to-defun
+  "C-x n e" #'soft-narrow-org-to-element
+  "C-x n n" #'soft-narrow-to-region
+  "C-x n p" #'soft-narrow-to-page
+  "C-x n s" #'soft-narrow-org-to-subtree
+  "C-x n w" #'soft-narrow-widen)
+
 ;;;###autoload
 (define-minor-mode soft-narrow-mode
   "Minor mode that binds to soft-narrow functions.
@@ -249,13 +260,7 @@ Stackable Narrowing:
 Successive narrowing creates intersection of all narrowed regions.
 Use `soft-narrow-widen' to pop back to previous narrow levels."
   :lighter (:eval (when (soft-narrow-active-p) soft-narrow-lighter))
-  :keymap '(("\C-xnb" . soft-narrow-org-to-block)
-            ("\C-xnd" . soft-narrow-to-defun)
-            ("\C-xne" . soft-narrow-org-to-element)
-            ("\C-xnn" . soft-narrow-to-region)
-            ("\C-xnp" . soft-narrow-to-page)
-            ("\C-xns" . soft-narrow-org-to-subtree)
-            ("\C-xnw" . soft-narrow-widen))
+  :keymap soft-narrow-mode-map
   :global t
   :group 'soft-narrow
   (unless soft-narrow-mode
@@ -278,10 +283,9 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
 (defun soft-narrow-org-to-block ()
   "Like `org-narrow-to-block', except using `soft-narrow-to-region'."
   (interactive)
-  (let* ((case-fold-search t)
-         (blockp (org-between-regexps-p "^[ \t]*#\\+begin_.*"
-                                        "^[ \t]*#\\+end_.*")))
-    (if blockp
+  (let ((case-fold-search t))
+    (if-let* ((blockp (org-between-regexps-p "^[ \t]*#\\+begin_.*"
+                                              "^[ \t]*#\\+end_.*")))
         (soft-narrow-to-region (car blockp) (cdr blockp))
       (user-error "Not in a block"))))
 
@@ -322,19 +326,16 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
   "Like `org-narrow-to-element', except using `soft-narrow-to-region'."
   (interactive)
   (let ((elem (org-element-at-point)))
-    (cond
-     ((eq (car elem) 'headline)
-      (soft-narrow-to-region
-       (org-element-property :begin elem)
-       (org-element-property :end elem)))
-     ((memq (car elem) org-element-greater-elements)
-      (soft-narrow-to-region
-       (org-element-property :contents-begin elem)
-       (org-element-property :contents-end elem)))
-     (t
-      (soft-narrow-to-region
-       (org-element-property :begin elem)
-       (org-element-property :end elem))))))
+    (pcase (car elem)
+      ((and type (guard (and (not (eq type 'headline))
+                             (memq type org-element-greater-elements))))
+       (soft-narrow-to-region
+        (org-element-property :contents-begin elem)
+        (org-element-property :contents-end elem)))
+      (_
+       (soft-narrow-to-region
+        (org-element-property :begin elem)
+        (org-element-property :end elem))))))
 
 ;;;###autoload
 (defun soft-narrow-to-page (&optional arg)
