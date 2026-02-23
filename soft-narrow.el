@@ -207,7 +207,8 @@ To widen the region again afterwards use `soft-narrow-widen'."
       ;; Push to stack
       (push stack-frame soft-narrow--stack)
       ;; Apply properties
-      (soft-narrow--apply-properties))))
+      (soft-narrow--apply-properties)
+      (deactivate-mark))))
 
 ;;;###autoload
 (defun soft-narrow-widen ()
