@@ -1503,15 +1503,17 @@
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-stickiness-after-region ()
-  "Test that front-sticky is set on the after-region blocked text."
+  "Test that front-sticky is NOT set on the after-region blocked text.
+The after-region relies on default front-nonsticky behavior so that
+`get-pos-property' at the end boundary returns nil, allowing the cursor
+to rest at the exact end position of the narrowed region."
   (let ((buf (soft-narrow-test--create-test-buffer 100)))
     (unwind-protect
         (with-current-buffer buf
           (soft-narrow-to-region 200 400)
 
-          ;; After-region should have front-sticky for cursor-intangible
-          (let ((sticky (get-text-property 500 'front-sticky)))
-            (should (memq 'cursor-intangible sticky))))
+          ;; After-region should NOT have front-sticky
+          (should-not (get-text-property 500 'front-sticky)))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-stickiness-not-inside-region ()
@@ -1535,7 +1537,7 @@
 
           ;; Verify stickiness properties exist
           (should (get-text-property 100 'rear-nonsticky))
-          (should (get-text-property 500 'front-sticky))
+          (should-not (get-text-property 500 'front-sticky))
 
           (soft-narrow-widen)
 

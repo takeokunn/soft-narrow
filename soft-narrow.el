@@ -169,8 +169,7 @@ text properties for cursor restriction and read-only protection."
                                  rear-nonsticky (cursor-intangible)
                                  front-sticky (cursor-intangible)))
           (add-text-properties r (point-max)
-                               '(cursor-intangible t read-only t
-                                 front-sticky (cursor-intangible))))
+                               '(cursor-intangible t read-only t)))
         (soft-narrow--create-overlays l r))
     ;; No valid intersection - clear all properties
     (with-silent-modifications
