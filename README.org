@@ -21,6 +21,14 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 
 * Installation
 
+** use-package
+
+#+begin_src emacs-lisp
+(use-package soft-narrow
+  :ensure t
+  :config (soft-narrow-mode 1))
+#+end_src
+
 ** leaf
 
 #+begin_src emacs-lisp
@@ -42,7 +50,9 @@ Or download =soft-narrow.el=, open it in Emacs, and use =M-x package-install-fro
 
 * Usage
 
-See the [[file:example/][example/]] directory for working examples.
+The [[file:example/][example/]] directory contains sample files for interactive testing:
+- =sample.el= — Emacs Lisp file with multiple defuns (try =C-x n d= to narrow to defun)
+- =sample.org= — Org file with headings and blocks (try =C-x n s= to narrow to subtree)
 
 1. Simply call =soft-narrow-to-region= to see it in action. To widen the
    region again afterwards use =soft-narrow-widen=.
@@ -84,12 +94,12 @@ soft-narrow supports stackable narrowing with *true intersection* semantics:
 (soft-narrow-widen)  ; Returns to full buffer
 #+end_src
 
-*Non-overlapping regions* create an "inverted intersection":
+*Non-overlapping regions* produce an empty intersection:
 #+begin_src emacs-lisp
 (soft-narrow-to-region 100 200)  ; Lines 100-200
 (soft-narrow-to-region 300 400)  ; Lines 300-400 (no overlap)
-;; Result: Entire buffer becomes read-only
-;; This is an edge case to avoid
+;; Result: intersection is empty, all narrowing properties are cleared.
+;; Use soft-narrow-widen to pop back and restore the previous region.
 #+end_src
 
 * Customization

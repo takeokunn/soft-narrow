@@ -50,7 +50,6 @@
 ;; the standard `narrow-to-region' is preferable, because soft-narrow
 ;; is susceptible to `inhibit-read-only' and some corner cases.
 
-;;; License:
 ;;
 ;; This file is NOT part of GNU Emacs.
 ;;
@@ -64,7 +63,6 @@
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU General Public License for more details.
 ;;
-
 
 ;;; Code:
 
@@ -83,15 +81,6 @@
 (declare-function org-end-of-subtree "org" (&optional invisible-ok to-heading))
 (declare-function org-at-heading-p "org" (&optional ignored))
 (declare-function org-get-limited-outline-regexp "org" (&optional arg1))
-
-(defconst soft-narrow-version "2.0.0" "Version of the soft-narrow.el package.")
-(defun soft-narrow-bug-report ()
-  "Open the GitHub issues page in a web browser.  Please send any bugs you find.
-Please include your Emacs and soft-narrow versions."
-  (interactive)
-  (message "Your soft-narrow-version is: %s, and your emacs version is: %s.\nPlease include this in your report!"
-           soft-narrow-version emacs-version)
-  (browse-url "https://github.com/takeokunn/soft-narrow/issues/new"))
 
 (defgroup soft-narrow nil
   "Customization group for soft-narrow."
@@ -203,13 +192,11 @@ To widen the region again afterwards use `soft-narrow-widen'."
   ;; Validate and normalize bounds
   (let ((start (max (min start end) (point-min)))
         (end (min (max start end) (point-max))))
-    (let ((stack-frame (cons (copy-marker start nil)
-                             (copy-marker end t))))
-      ;; Push to stack
-      (push stack-frame soft-narrow--stack)
-      ;; Apply properties
-      (soft-narrow--apply-properties)
-      (deactivate-mark))))
+    (push (cons (copy-marker start nil)
+                (copy-marker end t))
+          soft-narrow--stack)
+    (soft-narrow--apply-properties)
+    (deactivate-mark)))
 
 ;;;###autoload
 (defun soft-narrow-widen ()
@@ -275,10 +262,12 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
   "Face used on blocked text."
   :group 'soft-narrow)
 
-;;; ---------------------------------------
-;;; COPIED FUNCTIONS:
-;;; The following functions are adapted from their standard Emacs
-;;; counterparts.
+;;; Narrowing Commands:
+;;
+;; The following commands are adapted from their standard Emacs
+;; counterparts, using `soft-narrow-to-region' instead of
+;; `narrow-to-region'.
+
 ;;;###autoload
 (defun soft-narrow-org-to-block ()
   "Like `org-narrow-to-block', except using `soft-narrow-to-region'."
@@ -294,6 +283,8 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
   "Like `narrow-to-defun', except using `soft-narrow-to-region'."
   (interactive)
   (save-excursion
+    ;; Widen first so defun boundaries can be found regardless of
+    ;; current narrowing state (mirrors `narrow-to-defun' behavior).
     (widen)
     (let ((opoint (point))
           beg end)
@@ -366,22 +357,20 @@ Optional prefix ARG specifies which page to narrow to."
     ;; at the beginning of that line.
     ;; Before checking the match that was found,
     ;; verify that forward-page actually set match data.
-    (if (and (match-beginning 0)
-             (save-excursion
-               (goto-char (match-beginning 0))
-               (looking-at page-delimiter)))
-        (goto-char (match-beginning 0)))
-    (soft-narrow-to-region (point)
-                            (progn
-                              ;; Find top of the page.
-                              (forward-page -1)
-                              ;; If we found beginning of buffer, stay there.
-                              ;; If extra text follows page delimiter on same line,
-                              ;; include it.
-                              ;; Otherwise, show text starting with following line.
-                              (if (and (eolp) (not (bobp)))
-                                  (forward-line 1))
-                              (point)))))
+    (when (and (match-beginning 0)
+               (save-excursion
+                 (goto-char (match-beginning 0))
+                 (looking-at page-delimiter)))
+      (goto-char (match-beginning 0)))
+    (let ((end (point)))
+      ;; Find top of the page.
+      (forward-page -1)
+      ;; If we found beginning of buffer, stay there.
+      ;; If extra text follows page delimiter on same line, include it.
+      ;; Otherwise, show text starting with following line.
+      (when (and (eolp) (not (bobp)))
+        (forward-line 1))
+      (soft-narrow-to-region (point) end))))
 
 ;;;###autoload
 (defun soft-narrow-org-to-subtree ()

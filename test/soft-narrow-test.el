@@ -553,10 +553,9 @@
             (should (soft-narrow-active-p))
 
             ;; Widen should also be fast
-            (setq start (float-time))
-            (soft-narrow-widen)
-            (setq elapsed (- (float-time) start))
-            (should (< elapsed 0.1))))
+            (let ((widen-start (float-time)))
+              (soft-narrow-widen)
+              (should (< (- (float-time) widen-start) 0.1)))))
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-performance-multiple-narrows ()
@@ -1511,7 +1510,7 @@
 
           ;; Check overlay has soft-narrow tag
           (let ((ovs (overlays-at 50)))
-            (should (cl-some (lambda (ov) (overlay-get ov 'soft-narrow)) ovs))))
+            (should (seq-some (lambda (ov) (overlay-get ov 'soft-narrow)) ovs))))
       (soft-narrow-test--cleanup-buffer buf))))
 
 
@@ -1655,6 +1654,100 @@ properties should be set beyond the narrowed region end."
             ;; No front-sticky at the end
             (should-not (get-text-property (max (1- size) (point-min)) 'front-sticky))))
       (soft-narrow-test--cleanup-buffer buf))))
+
+
+;; Mode Deactivation and Cleanup Tests
+
+(ert-deftest soft-narrow-mode-deactivation-widens-all-buffers ()
+  "Test that disabling `soft-narrow-mode' widens all narrowed buffers."
+  (let ((buf1 (soft-narrow-test--create-test-buffer 50))
+        (buf2 (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf1
+            (soft-narrow-to-region 100 300))
+          (with-current-buffer buf2
+            (soft-narrow-to-region 50 200))
+          ;; Both should be narrowed
+          (should (with-current-buffer buf1 (soft-narrow-active-p)))
+          (should (with-current-buffer buf2 (soft-narrow-active-p)))
+          ;; Disable global mode
+          (soft-narrow-mode -1)
+          ;; Both should now be widened
+          (should-not (with-current-buffer buf1 (soft-narrow-active-p)))
+          (should-not (with-current-buffer buf2 (soft-narrow-active-p))))
+      (soft-narrow-test--cleanup-buffer buf1)
+      (soft-narrow-test--cleanup-buffer buf2))))
+
+(ert-deftest soft-narrow-cursor-intangible-mode-disabled-on-final-widen ()
+  "Test that `cursor-intangible-mode' is disabled on final widen."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 100 300)
+          ;; cursor-intangible-mode should be active
+          (should (bound-and-true-p cursor-intangible-mode))
+          ;; Final widen
+          (soft-narrow-widen)
+          ;; cursor-intangible-mode should be disabled
+          (should-not (bound-and-true-p cursor-intangible-mode)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-markers-nil-after-widen ()
+  "Test that markers are freed after widening."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 100 300)
+          ;; Capture marker references before widen
+          (let ((start-marker (caar soft-narrow--stack))
+                (end-marker (cdar soft-narrow--stack)))
+            ;; Markers are valid
+            (should (marker-position start-marker))
+            (should (marker-position end-marker))
+            ;; Widen pops and cleans up
+            (soft-narrow-widen)
+            ;; Markers should now be freed (position nil)
+            (should-not (marker-position start-marker))
+            (should-not (marker-position end-marker))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-extra-widen-is-harmless ()
+  "Test that calling `soft-narrow-widen' an extra time is harmless."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 100 300)
+          (should (soft-narrow-active-p))
+          ;; First widen: removes the narrowing
+          (soft-narrow-widen)
+          (should-not (soft-narrow-active-p))
+          ;; Second widen: no-op, should not error
+          (soft-narrow-widen)
+          (should-not (soft-narrow-active-p)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-to-page-negative-argument ()
+  "Test `soft-narrow-to-page' with a negative argument."
+  (let ((buf (generate-new-buffer " *soft-narrow-page-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "Page 1\n\f\n")
+          (insert "Page 2\n\f\n")
+          (insert "Page 3\n")
+
+          ;; Start at end of buffer (page 3)
+          (goto-char (point-max))
+
+          ;; Narrow to previous page (arg = -1)
+          (soft-narrow-to-page -1)
+
+          ;; Should be narrowed
+          (should (soft-narrow-active-p)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
 
 (provide 'soft-narrow-test)
 

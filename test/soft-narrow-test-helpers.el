@@ -20,8 +20,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-
 (defun soft-narrow-test--create-test-buffer (lines)
   "Create a temporary buffer with LINES lines of test content.
 Each line is numbered for easy reference."
@@ -41,10 +39,10 @@ Each line is numbered for easy reference."
 
 (defun soft-narrow-test--has-overlay-face-at (pos face)
   "Return non-nil if position POS has an overlay with FACE."
-  (cl-some (lambda (ov)
-             (and (overlay-get ov 'soft-narrow)
-                  (eq (overlay-get ov 'face) face)))
-           (overlays-at pos)))
+  (seq-some (lambda (ov)
+              (and (overlay-get ov 'soft-narrow)
+                   (eq (overlay-get ov 'face) face)))
+            (overlays-at pos)))
 
 (provide 'soft-narrow-test-helpers)
 
