@@ -8,6 +8,8 @@ Unlike =narrow-to-region=, which completely hides text outside the narrowed regi
 
 This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-narrow]] by Artur Malabarba, and reimplemented from scratch using modern Emacs 29.1+ APIs.
 
+[[file:screenshot.png]]
+
 * Features
 
 - *Zero per-keystroke overhead* — no post-command hooks or function advising
