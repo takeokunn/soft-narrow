@@ -39,9 +39,9 @@
 ;; (C-x n n, C-x n w, etc.) will use soft-narrow equivalents.
 ;;
 ;; Version 2.0.0 requires Emacs 29.1+ and uses modern APIs:
-;; - cursor-intangible property for zero per-keystroke overhead
+;; - cursor-intangible property for minimal per-keystroke overhead
 ;; - Stackable narrowing with true intersection semantics
-;; - No function advising or post-command-hook
+;; - No function advising; buffer-local post-command-hook for boundary clamping only
 ;;
 ;; To customise the face used to deemphasize unreachable text, customise
 ;; `soft-narrow-blocked-face'.
@@ -140,7 +140,8 @@ Overlays carry only the `face' property for visual deemphasis."
 (defun soft-narrow--apply-properties ()
   "Apply narrowing properties based on current intersection.
 Blocked regions get overlay face for visual deemphasis, plus
-text properties for cursor restriction and read-only protection."
+text properties for cursor restriction and read-only protection.
+Also manages a buffer-local `post-command-hook' for boundary clamping."
   (soft-narrow--delete-overlays)
   (if-let* ((intersection (soft-narrow--compute-intersection))
              (l (car intersection))
@@ -159,14 +160,29 @@ text properties for cursor restriction and read-only protection."
                                  front-sticky (cursor-intangible)))
           (add-text-properties r (point-max)
                                '(cursor-intangible t read-only t)))
-        (soft-narrow--create-overlays l r))
+        (soft-narrow--create-overlays l r)
+        ;; Depth 10 ensures this runs after cursor-intangible-mode (depth 0).
+        (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t))
     ;; No valid intersection - clear all properties
     (with-silent-modifications
       (remove-list-of-text-properties
        (point-min) (point-max)
        '(cursor-intangible read-only front-sticky rear-nonsticky))
       (when (bound-and-true-p cursor-intangible-mode)
-        (cursor-intangible-mode -1)))))
+        (cursor-intangible-mode -1)))
+    (remove-hook 'post-command-hook #'soft-narrow--clamp-point t)))
+
+(defun soft-narrow--clamp-point ()
+  "Clamp point to the narrowed region boundaries.
+Prevents the cursor from resting inside the visually blocked overlay areas.
+Added to `post-command-hook' as a buffer-local hook."
+  (when (soft-narrow-active-p)
+    (when-let* ((intersection (soft-narrow--compute-intersection))
+                (l (car intersection))
+                (r (cdr intersection)))
+      (cond
+       ((< (point) l) (goto-char l))
+       ((>= (point) r) (goto-char (max l (1- r))))))))
 
 ;;;###autoload
 (defun soft-narrow-to-region (start end)

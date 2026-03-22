@@ -1232,6 +1232,112 @@
       (soft-narrow-test--cleanup-buffer buf))))
 
 
+;; Boundary Clamping Tests
+
+(ert-deftest soft-narrow-boundary-clamp-bottom ()
+  "Test that cursor at r is clamped to r-1."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          (should (soft-narrow-active-p))
+
+          ;; Move to exactly r (position 400, which is blocked)
+          (goto-char 400)
+          (soft-narrow--clamp-point)
+
+          ;; Cursor should be clamped to r-1 = 399
+          (should (= (point) 399)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-clamp-past-bottom ()
+  "Test that cursor past r is clamped to r-1."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          (should (soft-narrow-active-p))
+
+          ;; Move past r into the blocked after-region
+          (goto-char 450)
+          (soft-narrow--clamp-point)
+
+          ;; Cursor should be clamped to r-1 = 399
+          (should (= (point) 399)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-clamp-top ()
+  "Test that cursor before l is clamped to l."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          (should (soft-narrow-active-p))
+
+          ;; Move before l into the blocked before-region
+          (goto-char 150)
+          (soft-narrow--clamp-point)
+
+          ;; Cursor should be clamped to l = 200
+          (should (= (point) 200)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-clamp-no-op-inside ()
+  "Test that cursor inside the narrow region is not moved."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+
+          (should (soft-narrow-active-p))
+
+          ;; Move to a position inside the narrow region
+          (goto-char 300)
+          (soft-narrow--clamp-point)
+
+          ;; Cursor should remain at 300 (no clamping needed)
+          (should (= (point) 300)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-clamp-inactive ()
+  "Test that clamp-point is a no-op when soft-narrow is inactive."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Do NOT call soft-narrow-to-region; mode remains inactive
+          (should-not (soft-narrow-active-p))
+
+          (goto-char 150)
+          (soft-narrow--clamp-point)
+
+          ;; Cursor must not move when soft-narrow is inactive
+          (should (= (point) 150)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-boundary-clamp-stacked-intersection ()
+  "Test clamping uses the intersection of stacked narrows."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; First narrow: [100, 400)
+          (soft-narrow-to-region 100 400)
+          ;; Second narrow: [200, 350) — intersection becomes [200, 350)
+          (soft-narrow-to-region 200 350)
+
+          (should (soft-narrow-active-p))
+
+          ;; Move to r of the intersection (350 is blocked)
+          (goto-char 350)
+          (soft-narrow--clamp-point)
+
+          ;; Cursor should be clamped to intersection r-1 = 349
+          (should (= (point) 349)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
 ;; Integration Scenario Tests
 
 (ert-deftest soft-narrow-integration-edit-workflow ()
@@ -1288,17 +1394,6 @@
       (goto-char (point-min))
       (should-not (search-forward "defadvice" nil t)))))
 
-(ert-deftest soft-narrow-no-post-command-hook ()
-  "Verify that soft-narrow.el does not register post-command-hook."
-  (let ((source-file (expand-file-name "soft-narrow.el"
-                                        (file-name-directory
-                                         (locate-library "soft-narrow")))))
-    (should (file-exists-p source-file))
-    (with-temp-buffer
-      (insert-file-contents source-file)
-      (goto-char (point-min))
-      ;; Search for post-command-hook in soft-narrow code (not in comments)
-      (should-not (re-search-forward "^[^;]*post-command-hook" nil t)))))
 
 (ert-deftest soft-narrow-integration-copy-paste-workflow ()
   "Test copy and paste workflow while narrowed."
