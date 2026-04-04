@@ -6,3 +6,5 @@ soft-narrow-autoloads.el
 #*#
 .serena/
 result
+.direnv/
+.claude/
