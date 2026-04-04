@@ -93,14 +93,21 @@
   "Stack of narrowing frames for LIFO semantics.
 Each frame is a cons (START-MARKER . END-MARKER).")
 
-(defvar-local soft-narrow--overlays nil
-  "List of overlays for face properties in blocked regions.")
+(defvar-local soft-narrow--before-overlay nil
+  "Persistent overlay covering blocked text before the narrowed region.")
+
+(defvar-local soft-narrow--after-overlay nil
+  "Persistent overlay covering blocked text after the narrowed region.")
+
+(defvar-local soft-narrow--cached-intersection nil
+  "Cached result of `soft-narrow--compute-intersection'.
+A cons (START . END) when valid, nil otherwise.
+Invalidated by `soft-narrow--apply-properties'.")
 
 ;;;###autoload
 (defun soft-narrow-active-p ()
   "Return non-nil if the current buffer is soft-narrowed."
-  (and (boundp 'soft-narrow--stack)
-       soft-narrow--stack))
+  soft-narrow--stack)
 
 (defun soft-narrow--compute-intersection ()
   "Compute intersection of all frames in the narrowing stack.
@@ -118,71 +125,88 @@ Return (START . END) for valid intersection, or nil if no valid intersection."
                 nil
               (loop (cdr frames) new-start new-end))))))))
 
-(defun soft-narrow--delete-overlays ()
-  "Delete all soft-narrow overlays and clear the list."
-  (mapc #'delete-overlay soft-narrow--overlays)
-  (setq soft-narrow--overlays nil))
+(defun soft-narrow--ensure-overlays ()
+  "Ensure persistent overlays exist for this buffer, creating them if needed."
+  (unless (overlayp soft-narrow--before-overlay)
+    (setq soft-narrow--before-overlay (make-overlay 1 1))
+    (overlay-put soft-narrow--before-overlay 'face 'soft-narrow-blocked-face)
+    (overlay-put soft-narrow--before-overlay 'soft-narrow t))
+  (unless (overlayp soft-narrow--after-overlay)
+    (setq soft-narrow--after-overlay (make-overlay 1 1 nil nil t))
+    (overlay-put soft-narrow--after-overlay 'face 'soft-narrow-blocked-face)
+    (overlay-put soft-narrow--after-overlay 'soft-narrow t)))
 
-(defun soft-narrow--create-overlays (start end)
-  "Create overlays for blocked regions outside START..END.
-Overlays carry only the `face' property for visual deemphasis."
-  (when (> start (point-min))
-    (let ((ov (make-overlay (point-min) start nil nil nil)))
-      (overlay-put ov 'face 'soft-narrow-blocked-face)
-      (overlay-put ov 'soft-narrow t)
-      (push ov soft-narrow--overlays)))
-  (when (< end (point-max))
-    (let ((ov (make-overlay end (point-max) nil nil t)))
-      (overlay-put ov 'face 'soft-narrow-blocked-face)
-      (overlay-put ov 'soft-narrow t)
-      (push ov soft-narrow--overlays))))
+(defun soft-narrow--show-overlays (start end)
+  "Position persistent overlays to cover blocked regions outside START..END."
+  (soft-narrow--ensure-overlays)
+  (if (> start (point-min))
+      (move-overlay soft-narrow--before-overlay (point-min) start)
+    (move-overlay soft-narrow--before-overlay 1 1))
+  (if (< end (point-max))
+      (move-overlay soft-narrow--after-overlay end (point-max))
+    (move-overlay soft-narrow--after-overlay 1 1)))
+
+(defun soft-narrow--hide-overlays ()
+  "Collapse persistent overlays to an empty range (effectively hide them)."
+  (when (overlayp soft-narrow--before-overlay)
+    (move-overlay soft-narrow--before-overlay 1 1))
+  (when (overlayp soft-narrow--after-overlay)
+    (move-overlay soft-narrow--after-overlay 1 1)))
+
+(defun soft-narrow--destroy-overlays ()
+  "Delete persistent overlays and clear buffer-local references."
+  (when (overlayp soft-narrow--before-overlay)
+    (delete-overlay soft-narrow--before-overlay)
+    (setq soft-narrow--before-overlay nil))
+  (when (overlayp soft-narrow--after-overlay)
+    (delete-overlay soft-narrow--after-overlay)
+    (setq soft-narrow--after-overlay nil)))
 
 (defun soft-narrow--apply-properties ()
   "Apply narrowing properties based on current intersection.
 Blocked regions get overlay face for visual deemphasis, plus
 text properties for cursor restriction and read-only protection.
 Also manages a buffer-local `post-command-hook' for boundary clamping."
-  (soft-narrow--delete-overlays)
-  (if-let* ((intersection (soft-narrow--compute-intersection))
-             (l (car intersection))
-             (r (cdr intersection)))
-      (progn
-        (when (fboundp 'cursor-intangible-mode)
+  (let ((intersection (soft-narrow--compute-intersection)))
+    (setq soft-narrow--cached-intersection intersection)
+    (if-let* ((l (car intersection))
+              (r (cdr intersection)))
+        (progn
           (unless (bound-and-true-p cursor-intangible-mode)
-            (cursor-intangible-mode 1)))
-        (with-silent-modifications
-          (remove-list-of-text-properties
-           (point-min) (point-max)
-           '(cursor-intangible read-only front-sticky rear-nonsticky))
-          (add-text-properties (point-min) l
-                               '(cursor-intangible t read-only t
-                                 rear-nonsticky (cursor-intangible)
-                                 front-sticky (cursor-intangible)))
-          (add-text-properties r (point-max)
-                               '(cursor-intangible t read-only t)))
-        (soft-narrow--create-overlays l r)
-        ;; Depth 10 ensures this runs after cursor-intangible-mode (depth 0).
-        (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t))
-    ;; No valid intersection - clear all properties
-    (with-silent-modifications
-      (remove-list-of-text-properties
-       (point-min) (point-max)
-       '(cursor-intangible read-only front-sticky rear-nonsticky))
-      (when (bound-and-true-p cursor-intangible-mode)
-        (cursor-intangible-mode -1)))
-    (remove-hook 'post-command-hook #'soft-narrow--clamp-point t)))
+            (cursor-intangible-mode 1))
+          (with-silent-modifications
+            (remove-list-of-text-properties
+             (point-min) (point-max)
+             '(cursor-intangible read-only front-sticky rear-nonsticky))
+            (add-text-properties (point-min) l
+                                 '(cursor-intangible t read-only t
+                                   rear-nonsticky (cursor-intangible)
+                                   front-sticky (cursor-intangible)))
+            (add-text-properties r (point-max)
+                                 '(cursor-intangible t read-only t)))
+          (soft-narrow--show-overlays l r)
+          ;; Depth 10 ensures this runs after cursor-intangible-mode (depth 0).
+          (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t))
+      ;; No valid intersection - clear all properties
+      (soft-narrow--hide-overlays)
+      (with-silent-modifications
+        (remove-list-of-text-properties
+         (point-min) (point-max)
+         '(cursor-intangible read-only front-sticky rear-nonsticky))
+        (when (bound-and-true-p cursor-intangible-mode)
+          (cursor-intangible-mode -1)))
+      (remove-hook 'post-command-hook #'soft-narrow--clamp-point t))))
 
 (defun soft-narrow--clamp-point ()
   "Clamp point to the narrowed region boundaries.
 Prevents the cursor from resting inside the visually blocked overlay areas.
 Added to `post-command-hook' as a buffer-local hook."
-  (when (soft-narrow-active-p)
-    (when-let* ((intersection (soft-narrow--compute-intersection))
-                (l (car intersection))
-                (r (cdr intersection)))
-      (cond
-       ((< (point) l) (goto-char l))
-       ((>= (point) r) (goto-char (max l (1- r))))))))
+  (when-let* ((intersection soft-narrow--cached-intersection)
+              (l (car intersection))
+              (r (cdr intersection)))
+    (cond
+     ((< (point) l) (goto-char l))
+     ((>= (point) r) (goto-char (max l (1- r)))))))
 
 ;;;###autoload
 (defun soft-narrow-to-region (start end)
@@ -270,7 +294,8 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
     (dolist (buf (buffer-list))
       (with-current-buffer buf
         (while (soft-narrow-active-p)
-          (soft-narrow-widen))))))
+          (soft-narrow-widen))
+        (soft-narrow--destroy-overlays)))))
 
 (defface soft-narrow-blocked-face
   '((((background light)) :foreground "Grey70")

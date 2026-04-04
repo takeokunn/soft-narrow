@@ -1553,19 +1553,18 @@
       (soft-narrow-test--cleanup-buffer buf))))
 
 (ert-deftest soft-narrow-overlay-cleanup-on-widen ()
-  "Test that overlays are removed on widen."
+  "Test that overlays are hidden (no face) on final widen."
   (let ((buf (soft-narrow-test--create-test-buffer 100)))
     (unwind-protect
         (with-current-buffer buf
           (soft-narrow-to-region 200 400)
 
-          ;; Overlays exist
-          (should soft-narrow--overlays)
+          ;; Overlays are visible
+          (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face))
 
           (soft-narrow-widen)
 
-          ;; Overlays should be cleaned up
-          (should-not soft-narrow--overlays)
+          ;; Overlays should no longer cover blocked regions
           (should-not (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face)))
       (soft-narrow-test--cleanup-buffer buf))))
 
@@ -1913,14 +1912,16 @@ Exercises the correction path where `beginning-of-defun' overshoots."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
-(ert-deftest soft-narrow-delete-overlays-empty-list ()
-  "Test that `soft-narrow--delete-overlays' is a no-op on an empty list."
+(ert-deftest soft-narrow-hide-overlays-without-overlays ()
+  "Test that `soft-narrow--hide-overlays' is a no-op when no overlays exist."
   (let ((buf (soft-narrow-test--create-test-buffer 10)))
     (unwind-protect
         (with-current-buffer buf
-          (should-not soft-narrow--overlays)
-          (soft-narrow--delete-overlays)        ; must not error
-          (should-not soft-narrow--overlays))
+          (should-not soft-narrow--before-overlay)
+          (should-not soft-narrow--after-overlay)
+          (soft-narrow--hide-overlays)          ; must not error
+          (should-not soft-narrow--before-overlay)
+          (should-not soft-narrow--after-overlay))
       (soft-narrow-test--cleanup-buffer buf))))
 
 
