@@ -1925,6 +1925,107 @@ Exercises the correction path where `beginning-of-defun' overshoots."
       (soft-narrow-test--cleanup-buffer buf))))
 
 
+;; Boundary Guard Tests
+
+(ert-deftest soft-narrow-guard-bottom-next-line ()
+  "Test that next-line at bottom boundary is suppressed by pre-command guard."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          ;; Move to last position in narrowed region
+          (goto-char 199)
+          (let ((this-command 'next-line))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-top-previous-line ()
+  "Test that previous-line at top boundary is suppressed by pre-command guard."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          ;; Move to first position in narrowed region
+          (goto-char 50)
+          (let ((this-command 'previous-line))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-allows-interior-movement ()
+  "Test that movement commands within the region are not suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          ;; Move to middle of narrowed region
+          (goto-char 100)
+          ;; next-line should NOT be suppressed
+          (let ((this-command 'next-line))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'next-line)))
+          ;; previous-line should NOT be suppressed
+          (let ((this-command 'previous-line))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'previous-line))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-bottom-forward-char ()
+  "Test that forward-char at last position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 199)
+          (let ((this-command 'forward-char))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-top-backward-char ()
+  "Test that backward-char at first position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 50)
+          (let ((this-command 'backward-char))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-hook-cleanup-on-widen ()
+  "Test that the pre-command-hook is removed when widening."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          ;; Hook should be installed
+          (should (memq #'soft-narrow--guard-boundary
+                        (buffer-local-value 'pre-command-hook buf)))
+          ;; Widen
+          (soft-narrow-widen)
+          ;; Hook should be removed
+          (should-not (memq #'soft-narrow--guard-boundary
+                            (buffer-local-value 'pre-command-hook buf))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
+(ert-deftest soft-narrow-guard-noop-when-inactive ()
+  "Test that guard is a no-op when soft-narrow--cached-intersection is nil."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; No narrowing active — cache is nil
+          (should-not soft-narrow--cached-intersection)
+          (goto-char 50)
+          (let ((this-command 'next-line))
+            (soft-narrow--guard-boundary)
+            ;; Command must not be suppressed
+            (should (eq this-command 'next-line))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
 (provide 'soft-narrow-test)
 
 ;;; soft-narrow-test.el ends here
