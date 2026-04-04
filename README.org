@@ -12,7 +12,7 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 
 * Features
 
-- *Zero per-keystroke overhead* — no post-command hooks or function advising
+- *Minimal overhead* — no function advising; uses a single buffer-local =post-command-hook= only for cursor boundary clamping
 - *Stackable narrowing* — true intersection semantics for progressive focusing
 - *Pure declarative approach* — uses overlays for visual deemphasis, =cursor-intangible= and =read-only= text properties for behavior
 - *Lightweight* — single-file implementation (~400 lines including org-mode integrations)
@@ -122,7 +122,7 @@ soft-narrow uses Emacs 29.1+ native features:
 - *Stickiness properties*: =front-sticky= / =rear-nonsticky= on =cursor-intangible= applied to the before-region only, preventing boundary flickering (workaround for Emacs Bug#51095). The after-region intentionally omits =front-sticky= so the cursor can rest at the exact end boundary of the narrowed region.
 - *Stackable state*: True intersection of multiple narrowed regions via marker-based LIFO stack
 
-This approach eliminates all runtime overhead — Emacs handles everything natively.
+Emacs handles visual deemphasis and cursor restriction natively.  A single buffer-local =post-command-hook= (=soft-narrow--clamp-point=) is added while narrowing is active to prevent the cursor from resting inside a blocked overlay region at the exact boundaries.
 
 ** Troubleshooting
 
