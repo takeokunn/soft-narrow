@@ -41,7 +41,7 @@
 ;; Version 2.0.0 requires Emacs 29.1+ and uses modern APIs:
 ;; - cursor-intangible property for minimal per-keystroke overhead
 ;; - Stackable narrowing with true intersection semantics
-;; - No function advising; buffer-local post-command-hook for boundary clamping only
+;; - No function advising; buffer-local pre/post-command-hooks for boundary enforcement
 ;;
 ;; To customise the face used to deemphasize unreachable text, customise
 ;; `soft-narrow-blocked-face'.
@@ -166,7 +166,8 @@ Return (START . END) for valid intersection, or nil if no valid intersection."
   "Apply narrowing properties based on current intersection.
 Blocked regions get overlay face for visual deemphasis, plus
 text properties for cursor restriction and read-only protection.
-Also manages a buffer-local `post-command-hook' for boundary clamping."
+Also manages buffer-local hooks: a `pre-command-hook' to suppress
+boundary-crossing movements and a `post-command-hook' for clamping."
   (let ((intersection (soft-narrow--compute-intersection)))
     (setq soft-narrow--cached-intersection intersection)
     (if-let* ((l (car intersection))
@@ -185,6 +186,7 @@ Also manages a buffer-local `post-command-hook' for boundary clamping."
             (add-text-properties r (point-max)
                                  '(cursor-intangible t read-only t)))
           (soft-narrow--show-overlays l r)
+          (add-hook 'pre-command-hook #'soft-narrow--guard-boundary nil t)
           ;; Depth 10 ensures this runs after cursor-intangible-mode (depth 0).
           (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t))
       ;; No valid intersection - clear all properties
@@ -195,7 +197,29 @@ Also manages a buffer-local `post-command-hook' for boundary clamping."
          '(cursor-intangible read-only front-sticky rear-nonsticky))
         (when (bound-and-true-p cursor-intangible-mode)
           (cursor-intangible-mode -1)))
+      (remove-hook 'pre-command-hook #'soft-narrow--guard-boundary t)
       (remove-hook 'post-command-hook #'soft-narrow--clamp-point t))))
+
+(defun soft-narrow--guard-boundary ()
+  "Suppress movement commands that would leave the narrowed region.
+Runs in `pre-command-hook' so the cursor never enters blocked areas,
+preventing visual flicker from the two-phase post-command correction."
+  (when-let* ((intersection soft-narrow--cached-intersection)
+              (l (car intersection))
+              (r (cdr intersection)))
+    (cond
+     ;; Bottom boundary: suppress downward/forward movement
+     ((and (>= (point) (1- r))
+           (memq this-command
+                 '(next-line forward-char forward-paragraph
+                   scroll-up-command end-of-buffer)))
+      (setq this-command #'ignore))
+     ;; Top boundary: suppress upward/backward movement
+     ((and (<= (point) l)
+           (memq this-command
+                 '(previous-line backward-char backward-paragraph
+                   scroll-down-command beginning-of-buffer)))
+      (setq this-command #'ignore)))))
 
 (defun soft-narrow--clamp-point ()
   "Clamp point to the narrowed region boundaries.
