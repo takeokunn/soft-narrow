@@ -1844,6 +1844,86 @@ properties should be set beyond the narrowed region end."
         (kill-buffer buf)))))
 
 
+
+;; Intersection Edge-Case Tests
+
+(ert-deftest soft-narrow-compute-intersection-empty-stack ()
+  "Test that `soft-narrow--compute-intersection' returns nil for empty stack."
+  (let ((buf (soft-narrow-test--create-test-buffer 10)))
+    (unwind-protect
+        (with-current-buffer buf
+          (should-not soft-narrow--stack)
+          (should-not (soft-narrow--compute-intersection)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-compute-intersection-single-frame ()
+  "Test `soft-narrow--compute-intersection' with exactly one frame.
+The dolist loop body never executes; result is returned from the initializer."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 100 300)
+          (let ((result (soft-narrow--compute-intersection)))
+            (should result)
+            (should (= (car result) 100))
+            (should (= (cdr result) 300))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
+;; Defun Narrowing Additional Tests
+
+(ert-deftest soft-narrow-to-defun-blank-lines-between-defuns ()
+  "Test `soft-narrow-to-defun' when blank lines separate consecutive defuns.
+Exercises the `while (looking-at \"^\\n\")' skip-blank-lines loop."
+  (let ((buf (generate-new-buffer " *soft-narrow-defun-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (emacs-lisp-mode)
+          (erase-buffer)
+          (insert "(defun soft-test-fn-1 ()\n")
+          (insert "  (message \"1\"))\n")
+          (insert "\n")
+          (insert "\n")
+          (insert "(defun soft-test-fn-2 ()\n")
+          (insert "  (message \"2\"))\n")
+          ;; Move inside the first defun body
+          (goto-char 15)
+          (soft-narrow-to-defun)
+          (should (soft-narrow-active-p)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest soft-narrow-to-defun-between-defuns ()
+  "Test `soft-narrow-to-defun' when point is between two defuns.
+Exercises the correction path where `beginning-of-defun' overshoots."
+  (let ((buf (generate-new-buffer " *soft-narrow-defun-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (emacs-lisp-mode)
+          (erase-buffer)
+          (insert "(defun soft-test-fn-a ()\n")
+          (insert "  (message \"a\"))\n")
+          (insert "\n")
+          (insert "(defun soft-test-fn-b ()\n")
+          (insert "  (message \"b\"))\n")
+          ;; Point on the blank line between the two defuns
+          (goto-char (+ (length "(defun soft-test-fn-a ()\n  (message \"a\"))\n") 1))
+          ;; Should not error; narrows to one of the surrounding defuns
+          (soft-narrow-to-defun)
+          (should (soft-narrow-active-p)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+
+(ert-deftest soft-narrow-delete-overlays-empty-list ()
+  "Test that `soft-narrow--delete-overlays' is a no-op on an empty list."
+  (let ((buf (soft-narrow-test--create-test-buffer 10)))
+    (unwind-protect
+        (with-current-buffer buf
+          (should-not soft-narrow--overlays)
+          (soft-narrow--delete-overlays)        ; must not error
+          (should-not soft-narrow--overlays))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
 (provide 'soft-narrow-test)
 
 ;;; soft-narrow-test.el ends here
