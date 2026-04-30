@@ -2026,6 +2026,78 @@ Exercises the correction path where `beginning-of-defun' overshoots."
             (should (eq this-command 'next-line))))
       (soft-narrow-test--cleanup-buffer buf))))
 
+(ert-deftest soft-narrow-guard-bottom-forward-paragraph ()
+  "Test that forward-paragraph at last position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 199)
+          (let ((this-command 'forward-paragraph))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-top-backward-paragraph ()
+  "Test that backward-paragraph at first position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 50)
+          (let ((this-command 'backward-paragraph))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-bottom-scroll-up-command ()
+  "Test that scroll-up-command at last position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 199)
+          (let ((this-command 'scroll-up-command))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-top-scroll-down-command ()
+  "Test that scroll-down-command at first position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 50)
+          (let ((this-command 'scroll-down-command))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-bottom-end-of-buffer ()
+  "Test that end-of-buffer at last position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 199)
+          (let ((this-command 'end-of-buffer))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-top-beginning-of-buffer ()
+  "Test that beginning-of-buffer at first position is suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 20)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 50 200)
+          (goto-char 50)
+          (let ((this-command 'beginning-of-buffer))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'ignore))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
 (provide 'soft-narrow-test)
 
 ;;; soft-narrow-test.el ends here

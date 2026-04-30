@@ -8,3 +8,4 @@ soft-narrow-autoloads.el
 result
 .direnv/
 .claude/
+.sisyphus/

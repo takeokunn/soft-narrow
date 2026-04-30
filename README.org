@@ -12,7 +12,7 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 
 * Features
 
-- *Minimal overhead* — no function advising; uses a single buffer-local =post-command-hook= only for cursor boundary clamping
+- *Minimal overhead* — no function advising; buffer-local =pre-command-hook= and =post-command-hook= for boundary handling, installed only while narrowing is active
 - *Stackable narrowing* — true intersection semantics for progressive focusing
 - *Pure declarative approach* — uses overlays for visual deemphasis, =cursor-intangible= and =read-only= text properties for behavior
 - *Lightweight* — single-file implementation (~400 lines including org-mode integrations)
@@ -117,12 +117,12 @@ Note: this is designed for user interaction. For use within Lisp code, the stand
 
 soft-narrow uses Emacs 29.1+ native features:
 - *Overlays with =face= property*: Visually deemphasizes text outside the narrowed region (greyed out)
-- *=cursor-intangible=*: Automatic motion restriction (no hooks)
+- *=cursor-intangible=*: Native cursor motion restriction via text properties
 - *=read-only= text property*: Prevents editing outside region
 - *Stickiness properties*: =front-sticky= / =rear-nonsticky= on =cursor-intangible= applied to the before-region only, preventing boundary flickering (workaround for Emacs Bug#51095). The after-region intentionally omits =front-sticky= so the cursor can rest at the exact end boundary of the narrowed region.
 - *Stackable state*: True intersection of multiple narrowed regions via marker-based LIFO stack
 
-Emacs handles visual deemphasis and cursor restriction natively.  A single buffer-local =post-command-hook= (=soft-narrow--clamp-point=) is added while narrowing is active to prevent the cursor from resting inside a blocked overlay region at the exact boundaries.
+Emacs handles visual deemphasis and cursor restriction natively.  While narrowing is active, two buffer-local hooks are installed: =soft-narrow--guard-boundary= (=pre-command-hook=) suppresses movement commands that would cross a narrowed-region boundary, eliminating two-phase visual flicker; =soft-narrow--clamp-point= (=post-command-hook=, depth 10) clamps point if a command somehow lands the cursor inside a blocked overlay region.  Both hooks are removed on the final widen.
 
 ** Troubleshooting
 
@@ -147,6 +147,10 @@ make lint          # Run checkdoc
 make package-lint  # Run package-lint
 nix flake check    # Run all checks via Nix
 #+end_src
+
+* Changelog
+
+See [[file:CHANGELOG.org][CHANGELOG.org]] for release history.
 
 * License
 
