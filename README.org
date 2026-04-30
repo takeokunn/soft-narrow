@@ -148,10 +148,6 @@ make package-lint  # Run package-lint
 nix flake check    # Run all checks via Nix
 #+end_src
 
-* Changelog
-
-See [[file:CHANGELOG.org][CHANGELOG.org]] for release history.
-
 * License
 
 GPL-3.0+. See [[file:LICENSE][LICENSE]].
