@@ -5,7 +5,7 @@
 ;; Author: takeokunn <bararararatty@gmail.com>
 ;; Maintainer: takeokunn <bararararatty@gmail.com>
 ;; URL: https://github.com/takeokunn/soft-narrow
-;; Version: 2.0.0
+;; Version: 1.0.0
 ;; Keywords: faces convenience
 ;; Package-Requires: ((emacs "29.1"))
 
@@ -53,7 +53,7 @@
 ;; If you activate `soft-narrow-mode', the standard narrowing keys
 ;; (C-x n n, C-x n w, etc.) will use soft-narrow equivalents.
 ;;
-;; Version 2.0.0 requires Emacs 29.1+ and uses modern APIs:
+;; Version 1.0.0 requires Emacs 29.1+ and uses modern APIs:
 ;; - cursor-intangible property for minimal per-keystroke overhead
 ;; - Stackable narrowing with true intersection semantics
 ;; - No function advising; buffer-local pre/post-command-hooks for boundary enforcement
@@ -286,7 +286,7 @@ If no narrowing is active, this function does nothing harmlessly."
   "Lighter used in the mode-line while mode is active."
   :type 'string
   :group 'soft-narrow
-  :package-version '(soft-narrow . "2.0.0"))
+  :package-version '(soft-narrow . "1.0.0"))
 
 (defvar-keymap soft-narrow-mode-map
   :doc "Keymap for `soft-narrow-mode'."
