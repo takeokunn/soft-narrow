@@ -65,6 +65,20 @@
 ;; the standard `narrow-to-region' is preferable, because soft-narrow
 ;; is susceptible to `inhibit-read-only' and some corner cases.
 ;;
+;; Restriction model and its limits:
+;; soft-narrow keeps `point-min'/`point-max' pointed at the whole buffer
+;; so the surrounding text stays visible.  It therefore does NOT scope
+;; commands that scan the accessible buffer -- org export, `count-words',
+;; `mark-whole-buffer', `sort-lines', `fill-region', babel execution and
+;; the like still see the entire buffer.  This is inherent: Emacs ties
+;; the accessible portion to the displayed portion, so a purely visual
+;; narrowing cannot automatically restrict such commands.  When you need
+;; an operation scoped to the visible region, wrap it in
+;; `soft-narrow-with-restriction' (which applies a genuine
+;; `narrow-to-region' for the duration) or run it via the interactive
+;; `soft-narrow-execute' (C-x n x).  `soft-narrow-org-export-dispatch' is
+;; a ready-made wrapper for org export.
+;;
 ;; The `soft-narrow-org-to-*' commands work in `org-mode' buffers and
 ;; require org-mode to be loaded at runtime; org-mode is not declared in
 ;; `Package-Requires' because it ships with Emacs and is loaded lazily.
@@ -88,6 +102,7 @@
 (declare-function org-end-of-subtree "org" (&optional invisible-ok to-heading))
 (declare-function org-at-heading-p "org" (&optional ignored))
 (declare-function org-get-limited-outline-regexp "org" (&optional arg1))
+(declare-function org-export-dispatch "ox" (&optional arg))
 
 (defgroup soft-narrow nil
   "Customization group for soft-narrow."
@@ -147,6 +162,15 @@ disabled on final widen."
 (defun soft-narrow-active-p ()
   "Return non-nil if the current buffer is soft-narrowed."
   soft-narrow--stack)
+
+;;;###autoload
+(defun soft-narrow-region-bounds ()
+  "Return the visible soft-narrow region as a cons (START . END).
+Return nil when the buffer is not soft-narrowed or when the narrowing
+stack has an empty (non-overlapping) intersection.  Intended for use
+with `soft-narrow-with-restriction' to scope buffer-wide operations to
+the soft-narrowed region."
+  (soft-narrow--compute-intersection))
 
 (defun soft-narrow--compute-intersection ()
   "Compute intersection of all frames in the narrowing stack.
@@ -448,7 +472,8 @@ If no narrowing is active, this function does nothing harmlessly."
   "C-x n n" #'soft-narrow-to-region
   "C-x n p" #'soft-narrow-to-page
   "C-x n s" #'soft-narrow-org-to-subtree
-  "C-x n w" #'soft-narrow-widen)
+  "C-x n w" #'soft-narrow-widen
+  "C-x n x" #'soft-narrow-execute)
 
 ;;;###autoload
 (define-minor-mode soft-narrow-mode
@@ -483,6 +508,70 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
     (((background dark)) :foreground "Grey30"))
   "Face used on blocked text."
   :group 'soft-narrow)
+
+;;; Real-Restriction Escape Hatch:
+;;
+;; soft-narrow intentionally leaves `point-min'/`point-max' pointing at
+;; the whole buffer so the surrounding text stays visible.  The cost is
+;; that commands which scan the accessible buffer -- org export,
+;; `count-words', `mark-whole-buffer', `sort-lines', `fill-region',
+;; babel execution, and so on -- ignore the soft narrowing and operate
+;; on the entire buffer.  This is inherent: Emacs ties the accessible
+;; portion to the displayed portion, so a purely visual narrowing cannot
+;; automatically scope such commands.
+;;
+;; `soft-narrow-with-restriction' bridges the gap on demand by applying a
+;; genuine `narrow-to-region' to the soft-narrow bounds for the dynamic
+;; extent of its body, then restoring the previous restriction.  Use it
+;; (or the interactive `soft-narrow-execute') to scope any buffer-wide
+;; operation to the visible region.
+
+(defmacro soft-narrow-with-restriction (&rest body)
+  "Run BODY with a real restriction to the current soft-narrow region.
+soft-narrow deliberately keeps `point-min'/`point-max' at the whole
+buffer so surrounding text stays visible; as a result, commands that
+scan the accessible buffer (org export, `count-words',
+`mark-whole-buffer', sorting, filling, ...) ignore the soft narrowing.
+Wrapping such an operation in this macro applies a genuine
+`narrow-to-region' to the soft-narrow bounds for the dynamic extent of
+BODY (restored afterwards via `save-restriction'), so the operation is
+scoped exactly to the visible region.  When the buffer is not
+soft-narrowed, BODY runs unchanged."
+  (declare (indent 0) (debug t))
+  (let ((bounds (make-symbol "bounds")))
+    `(let ((,bounds (soft-narrow-region-bounds)))
+       (save-restriction
+         (when ,bounds
+           (narrow-to-region (car ,bounds) (cdr ,bounds)))
+         ,@body))))
+
+;;;###autoload
+(defun soft-narrow-execute (command)
+  "Read COMMAND and run it scoped to the soft-narrow region.
+COMMAND is read interactively with completion and invoked via
+`call-interactively' inside `soft-narrow-with-restriction', so
+buffer-scanning commands (org export, `count-words',
+`mark-whole-buffer', ...) act on the soft-narrowed region even though
+soft-narrow does not restrict `point-min'/`point-max'.  Bound to
+\\<soft-narrow-mode-map>\\[soft-narrow-execute] in `soft-narrow-mode'."
+  (interactive
+   (list (read-command
+          (if (soft-narrow-active-p)
+              "Run within soft-narrow region: "
+            "Run command (no soft-narrowing active): "))))
+  (soft-narrow-with-restriction
+    (call-interactively command)))
+
+;;;###autoload
+(defun soft-narrow-org-export-dispatch ()
+  "Like `org-export-dispatch', but scoped to the soft-narrow region.
+Runs `org-export-dispatch' inside `soft-narrow-with-restriction' so that
+export only sees the soft-narrowed region instead of the whole buffer."
+  (interactive)
+  (require 'org nil t)
+  (require 'ox nil t)
+  (soft-narrow-with-restriction
+    (call-interactively 'org-export-dispatch)))
 
 ;;; Narrowing Commands:
 ;;

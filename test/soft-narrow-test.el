@@ -16,7 +16,7 @@
 
 ;;; Commentary:
 
-;; Comprehensive test suite for soft-narrow.el v2.0.0 covering:
+;; Comprehensive test suite for soft-narrow.el covering:
 ;; - Basic functionality tests
 ;; - Stackable intersection tests
 ;; - Cursor restriction tests using cursor-intangible
@@ -2299,6 +2299,31 @@ With insertion type t, the marker moves with the original text."
           (should-not (get-text-property 3 'cursor-intangible)))
       (kill-buffer buf))))
 
+(ert-deftest soft-narrow-org-commands-load-dependencies ()
+  "Test that org commands work without pre-loading org.
+Oracle-identified gap: on `emacs -Q', org-narrow commands
+fails with `void-function' because org is not loaded."
+  (skip-unless (locate-library "org"))
+  (skip-unless (locate-library "org-element"))
+  (let ((buf (generate-new-buffer " *soft-narrow-org-load-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (insert "* Heading\nsome text\n")
+          (goto-char (point-min))
+          ;; org-to-subtree should load org automatically
+          (soft-narrow-org-to-subtree)
+          (should (soft-narrow-active-p))
+          (soft-narrow-widen)
+          ;; org-to-block should load org automatically
+          (insert "#+begin_example\nblock text\n#+end_example\n")
+          (goto-char (point-min))
+          (forward-line 1)
+          (soft-narrow-org-to-block)
+          (should (soft-narrow-active-p))
+          (soft-narrow-widen))
+      (kill-buffer buf))))
+
 ;; Cache Refresh After Edit Tests
 ;; Regression: editing inside the visible region shifts the stack markers,
 ;; so the cached integer intersection must be refreshed via
@@ -2454,34 +2479,117 @@ Falls back to narrowing the whole element rather than erroring."
               (should (= (car intersection) 1))))
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
-;; Org Lazy-Load Test
-;; Regression: on `emacs -Q', org-narrow commands fail with `void-function'
-;; because org is not loaded; the org commands must `require' it themselves.
+;; Real-Restriction Escape Hatch Tests
+;; soft-narrow does not restrict point-min/point-max, so buffer-scanning
+;; commands ignore the narrowing.  `soft-narrow-with-restriction' applies
+;; a real temporary `narrow-to-region' so such commands can be scoped.
 
-(ert-deftest soft-narrow-org-commands-load-dependencies ()
-  "Test that org commands work without pre-loading org.
-Oracle-identified gap: on `emacs -Q', org-narrow commands
-fails with `void-function' because org is not loaded."
-  (skip-unless (locate-library "org"))
-  (skip-unless (locate-library "org-element"))
-  (let ((buf (generate-new-buffer " *soft-narrow-org-load-test*")))
+(ert-deftest soft-narrow-region-bounds-accessor ()
+  "Test that `soft-narrow-region-bounds' reports the visible region."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
     (unwind-protect
         (with-current-buffer buf
-          (org-mode)
-          (insert "* Heading\nsome text\n")
-          (goto-char (point-min))
-          ;; org-to-subtree should load org automatically
-          (soft-narrow-org-to-subtree)
-          (should (soft-narrow-active-p))
-          (soft-narrow-widen)
-          ;; org-to-block should load org automatically
-          (insert "#+begin_example\nblock text\n#+end_example\n")
-          (goto-char (point-min))
-          (forward-line 1)
-          (soft-narrow-org-to-block)
-          (should (soft-narrow-active-p))
-          (soft-narrow-widen))
-      (kill-buffer buf))))
+          ;; nil when inactive
+          (should-not (soft-narrow-region-bounds))
+          (soft-narrow-to-region 200 400)
+          (should (equal (soft-narrow-region-bounds) '(200 . 400)))
+          ;; reflects intersection of stacked narrows
+          (soft-narrow-to-region 250 350)
+          (should (equal (soft-narrow-region-bounds) '(250 . 350)))
+          ;; nil for empty (non-overlapping) intersection
+          (soft-narrow-to-region 600 700)
+          (should-not (soft-narrow-region-bounds)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-with-restriction-scopes-buffer-scan ()
+  "Test that `soft-narrow-with-restriction' scopes buffer-wide commands.
+`mark-whole-buffer' and `count-words' see only the soft-narrow region."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+          ;; count-words on point-min..point-max sees only the region
+          (let ((full (count-words (point-min) (point-max)))
+                (scoped (soft-narrow-with-restriction
+                          (count-words (point-min) (point-max)))))
+            (should (< scoped full)))
+          ;; mark-whole-buffer scopes to the region
+          (soft-narrow-with-restriction (mark-whole-buffer))
+          (should (= (region-beginning) 200))
+          (should (= (region-end) 400)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-with-restriction-restores-restriction ()
+  "Test that `soft-narrow-with-restriction' restores the prior restriction.
+Both the common no-restriction case and a pre-existing real narrowing
+must be restored after the body runs."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+          (let ((pmin (point-min)) (pmax (point-max)))
+            (soft-narrow-with-restriction (ignore))
+            ;; Full buffer bounds restored
+            (should (= (point-min) pmin))
+            (should (= (point-max) pmax)))
+          ;; A pre-existing real restriction is preserved
+          (narrow-to-region 150 500)
+          (soft-narrow-with-restriction (ignore))
+          (should (= (point-min) 150))
+          (should (= (point-max) 500))
+          (widen))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-with-restriction-noop-when-inactive ()
+  "Test that `soft-narrow-with-restriction' is a passthrough when inactive."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (should-not (soft-narrow-active-p))
+          (let ((pmin (point-min)) (pmax (point-max)))
+            (let ((scanned (soft-narrow-with-restriction
+                             (cons (point-min) (point-max)))))
+              ;; Body sees the full buffer (no narrowing applied)
+              (should (= (car scanned) pmin))
+              (should (= (cdr scanned) pmax)))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-execute-keybinding ()
+  "Test that `soft-narrow-mode' binds C-x n x to `soft-narrow-execute'."
+  (let ((buf (generate-new-buffer " *soft-narrow-execute-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-mode 1)
+          (should (eq (key-binding [?\C-x ?n ?x]) 'soft-narrow-execute))
+          (soft-narrow-mode 0))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest soft-narrow-org-export-scoped ()
+  "Test that org export wrapped in the escape hatch is scoped to the region.
+The reported failure: exporting while soft-narrowed leaked the whole
+buffer.  `soft-narrow-with-restriction' scopes export to the subtree."
+  :tags '(org-mode)
+  (when (and (require 'org nil t)
+             (require 'ox nil t)
+             (require 'ox-ascii nil t))
+    (let ((buf (generate-new-buffer " *soft-narrow-org-export*")))
+      (unwind-protect
+          (with-current-buffer buf
+            (org-mode)
+            (insert "* Heading A\nContent A.\n"
+                    "* Heading B\nContent B.\n"
+                    "* Heading C\nContent C.\n")
+            (goto-char 1)
+            (soft-narrow-org-to-subtree)
+            ;; Unscoped export leaks the other headings
+            (let ((leaked (org-export-as 'ascii)))
+              (should (string-match-p "Heading B" leaked)))
+            ;; Scoped export sees only Heading A
+            (let ((scoped (soft-narrow-with-restriction (org-export-as 'ascii))))
+              (should (string-match-p "Heading A" scoped))
+              (should-not (string-match-p "Heading B" scoped))
+              (should-not (string-match-p "Heading C" scoped))))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
 
 (provide 'soft-narrow-test)
 
