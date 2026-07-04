@@ -5,7 +5,7 @@
 ;; Author: takeokunn <bararararatty@gmail.com>
 ;; Maintainer: takeokunn <bararararatty@gmail.com>
 ;; URL: https://github.com/takeokunn/soft-narrow
-;; Version: 1.0.0
+;; Version: 1.1.0
 ;; Keywords: faces convenience
 ;; Package-Requires: ((emacs "29.1"))
 
@@ -462,7 +462,7 @@ If no narrowing is active, this function does nothing harmlessly."
   "Lighter used in the mode-line while mode is active."
   :type 'string
   :group 'soft-narrow
-  :package-version '(soft-narrow . "1.0.0"))
+  :package-version '(soft-narrow . "1.1.0"))
 
 (defvar-keymap soft-narrow-mode-map
   :doc "Keymap for `soft-narrow-mode'."
