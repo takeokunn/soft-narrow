@@ -23,7 +23,7 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 
 * Installation
 
-** use-package
+** use-package (once available on MELPA)
 
 #+begin_src emacs-lisp
 (use-package soft-narrow

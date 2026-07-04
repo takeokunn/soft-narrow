@@ -71,8 +71,10 @@
 
 ;;; Code:
 
-;; Org-mode variables used in org narrowing functions
-(defvar org-element-greater-elements)
+;; Forward declaration to suppress byte-compiler warnings.
+;; The actual value is set by org-element.el.
+(with-no-warnings
+  (defvar org-element-greater-elements))
 
 ;; Org-mode macro (needed at compile time for macro expansion)
 (eval-when-compile
@@ -265,6 +267,11 @@ To widen the region again afterwards use `soft-narrow-widen'."
                 (copy-marker end t))
           soft-narrow--stack)
     (soft-narrow--apply-properties)
+    ;; Move point into the visible region if it landed in a blocked area,
+    ;; matching `narrow-to-region' (which always leaves point in bounds).
+    ;; Interactive calls also get this via `post-command-hook', but Lisp
+    ;; callers rely on this explicit clamp.
+    (soft-narrow--clamp-point)
     (deactivate-mark)))
 
 ;;;###autoload
@@ -342,6 +349,7 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
 (defun soft-narrow-org-to-block ()
   "Like `org-narrow-to-block', except using `soft-narrow-to-region'."
   (interactive)
+  (require 'org nil t)
   (let ((case-fold-search t))
     (if-let* ((blockp (org-between-regexps-p "^[ \t]*#\\+begin_.*"
                                               "^[ \t]*#\\+end_.*")))
@@ -353,43 +361,56 @@ Use `soft-narrow-widen' to pop back to previous narrow levels."
   "Like `narrow-to-defun', except using `soft-narrow-to-region'."
   (interactive)
   (save-excursion
-    ;; Widen first so defun boundaries can be found regardless of
-    ;; current narrowing state (mirrors `narrow-to-defun' behavior).
-    (widen)
-    (let ((opoint (point))
-          beg end)
-      (let ((here (point)))
-        (unless (eolp)
-          (forward-char))
-        (beginning-of-defun)
-        (when (< (point) here)
-          (goto-char here)
-          (beginning-of-defun)))
-      (setq beg (point))
-      (end-of-defun)
-      (setq end (point))
-      (while (looking-at "^\n")
-        (forward-line 1))
-      (unless (> (point) opoint)
-        ;; beginning-of-defun moved back one defun
-        ;; so we got the wrong one.
-        (goto-char opoint)
+    ;; Widen inside `save-restriction' so defun boundaries can be found
+    ;; regardless of any active restriction, while preserving that
+    ;; restriction (a bare `widen' would permanently discard a user's
+    ;; real `narrow-to-region').
+    (save-restriction
+      (widen)
+      (let ((opoint (point))
+            beg end)
+        (let ((here (point)))
+          (unless (eolp)
+            (forward-char))
+          (beginning-of-defun)
+          (when (< (point) here)
+            (goto-char here)
+            (beginning-of-defun)))
+        (setq beg (point))
         (end-of-defun)
         (setq end (point))
-        (beginning-of-defun)
-        (setq beg (point)))
-      (goto-char end)
-      (re-search-backward "^\n" (- (point) 1) t)
-      (soft-narrow-to-region beg end))))
+        (while (looking-at "^\n")
+          (forward-line 1))
+        (unless (> (point) opoint)
+          ;; beginning-of-defun moved back one defun
+          ;; so we got the wrong one.
+          (goto-char opoint)
+          (end-of-defun)
+          (setq end (point))
+          (beginning-of-defun)
+          (setq beg (point)))
+        (goto-char end)
+        (re-search-backward "^\n" (- (point) 1) t)
+        (soft-narrow-to-region beg end)))))
 
 ;;;###autoload
 (defun soft-narrow-org-to-element ()
   "Like `org-narrow-to-element', except using `soft-narrow-to-region'."
   (interactive)
+  (require 'org nil t)
+  (require 'org-element nil t)
   (let ((elem (org-element-at-point)))
     (pcase (car elem)
       ((and type (guard (and (not (eq type 'headline))
-                             (memq type org-element-greater-elements))))
+                             (memq type org-element-greater-elements)
+                             ;; An empty greater element (e.g. an empty
+                             ;; block or drawer) has no contents; its
+                             ;; :contents-begin/:contents-end are nil.
+                             ;; Guard here so we fall through to the
+                             ;; :begin/:end branch instead of passing nil
+                             ;; to `soft-narrow-to-region'.
+                             (org-element-property :contents-begin elem)
+                             (org-element-property :contents-end elem))))
        (soft-narrow-to-region
         (org-element-property :contents-begin elem)
         (org-element-property :contents-end elem)))
@@ -405,47 +426,53 @@ Optional prefix ARG specifies which page to narrow to."
   (interactive "P")
   (setq arg (if arg (prefix-numeric-value arg) 0))
   (save-excursion
-    (widen)
-    (if (> arg 0)
-        (forward-page arg)
-      (if (< arg 0)
-          (let ((adjust 0)
-                (opoint (point)))
-            ;; If we are not now at the beginning of a page,
-            ;; move back one extra time, to get to the start of this page.
-            (save-excursion
-              (beginning-of-line)
-              (or (and (looking-at page-delimiter)
-                       (eq (match-end 0) opoint))
-                  (setq adjust 1)))
-            (forward-page (- arg adjust)))))
-    ;; Find end of the page.
-    (set-match-data nil)
-    (forward-page)
-    ;; If we stopped due to end of buffer, stay there.
-    ;; If we stopped after a page delimiter, put end of restriction
-    ;; at the beginning of that line.
-    ;; Before checking the match that was found,
-    ;; verify that forward-page actually set match data.
-    (when (and (match-beginning 0)
-               (save-excursion
-                 (goto-char (match-beginning 0))
-                 (looking-at page-delimiter)))
-      (goto-char (match-beginning 0)))
-    (let ((end (point)))
-      ;; Find top of the page.
-      (forward-page -1)
-      ;; If we found beginning of buffer, stay there.
-      ;; If extra text follows page delimiter on same line, include it.
-      ;; Otherwise, show text starting with following line.
-      (when (and (eolp) (not (bobp)))
-        (forward-line 1))
-      (soft-narrow-to-region (point) end))))
+    ;; Widen inside `save-restriction' so page boundaries can be found
+    ;; regardless of any active restriction, while preserving that
+    ;; restriction (a bare `widen' would permanently discard a user's
+    ;; real `narrow-to-region').
+    (save-restriction
+      (widen)
+      (if (> arg 0)
+          (forward-page arg)
+        (if (< arg 0)
+            (let ((adjust 0)
+                  (opoint (point)))
+              ;; If we are not now at the beginning of a page,
+              ;; move back one extra time, to get to the start of this page.
+              (save-excursion
+                (beginning-of-line)
+                (or (and (looking-at page-delimiter)
+                         (eq (match-end 0) opoint))
+                    (setq adjust 1)))
+              (forward-page (- arg adjust)))))
+      ;; Find end of the page.
+      (set-match-data nil)
+      (forward-page)
+      ;; If we stopped due to end of buffer, stay there.
+      ;; If we stopped after a page delimiter, put end of restriction
+      ;; at the beginning of that line.
+      ;; Before checking the match that was found,
+      ;; verify that forward-page actually set match data.
+      (when (and (match-beginning 0)
+                 (save-excursion
+                   (goto-char (match-beginning 0))
+                   (looking-at page-delimiter)))
+        (goto-char (match-beginning 0)))
+      (let ((end (point)))
+        ;; Find top of the page.
+        (forward-page -1)
+        ;; If we found beginning of buffer, stay there.
+        ;; If extra text follows page delimiter on same line, include it.
+        ;; Otherwise, show text starting with following line.
+        (when (and (eolp) (not (bobp)))
+          (forward-line 1))
+        (soft-narrow-to-region (point) end)))))
 
 ;;;###autoload
 (defun soft-narrow-org-to-subtree ()
   "Like `org-narrow-to-subtree', except using `soft-narrow-to-region'."
   (interactive)
+  (require 'org nil t)
   (save-excursion
     (save-match-data
       (org-with-limited-levels

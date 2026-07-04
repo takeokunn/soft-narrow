@@ -2098,6 +2098,118 @@ Exercises the correction path where `beginning-of-defun' overshoots."
             (should (eq this-command 'ignore))))
       (soft-narrow-test--cleanup-buffer buf))))
 
+
+;; Real-Restriction Preservation Tests
+;; Regression: `soft-narrow-to-defun' / `soft-narrow-to-page' must not
+;; discard a user's real `narrow-to-region' restriction via a bare `widen'.
+
+(ert-deftest soft-narrow-to-defun-preserves-real-restriction ()
+  "Test that `soft-narrow-to-defun' keeps an active real narrowing intact."
+  (let ((buf (generate-new-buffer " *soft-narrow-defun-restriction*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (emacs-lisp-mode)
+          (insert "(defun a () 1)\n\n(defun b () 2)\n\n(defun c () 3)\n")
+          (narrow-to-region 5 30)
+          (goto-char 6)
+          (ignore-errors (soft-narrow-to-defun))
+          ;; The user's real restriction must survive
+          (should (= (point-min) 5))
+          (should (= (point-max) 30)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest soft-narrow-to-page-preserves-real-restriction ()
+  "Test that `soft-narrow-to-page' keeps an active real narrowing intact."
+  (let ((buf (generate-new-buffer " *soft-narrow-page-restriction*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "P1\n\f\nP2\n\f\nP3\n")
+          (narrow-to-region 3 9)
+          (goto-char 4)
+          (ignore-errors (soft-narrow-to-page))
+          (should (= (point-min) 3))
+          (should (= (point-max) 9)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+;; Point-Clamp-On-Narrow Test
+;; Regression: narrowing must leave point inside the visible region even
+;; for non-interactive callers (matching `narrow-to-region').
+
+(ert-deftest soft-narrow-clamps-point-into-region-on-narrow ()
+  "Test that `soft-narrow-to-region' moves point into the visible region.
+If point was in what becomes a blocked area, it must be pulled inside."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Point before the region -> clamps up to l
+          (goto-char 50)
+          (soft-narrow-to-region 200 400)
+          (should (= (point) 200))
+          (soft-narrow-widen)
+          ;; Point after the region -> clamps down to r-1
+          (goto-char 800)
+          (soft-narrow-to-region 200 400)
+          (should (= (point) 399))
+          (soft-narrow-widen)
+          ;; Point already inside -> unchanged
+          (goto-char 300)
+          (soft-narrow-to-region 200 400)
+          (should (= (point) 300)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+;; Empty Greater Element Test
+;; Regression: an empty greater element has nil :contents-begin/-end;
+;; `soft-narrow-org-to-element' must not pass nil to
+;; `soft-narrow-to-region' (which errored with wrong-type-argument).
+
+(ert-deftest soft-narrow-org-to-element-empty-greater-element ()
+  "Test `soft-narrow-org-to-element' on an empty greater element.
+Falls back to narrowing the whole element rather than erroring."
+  :tags '(org-mode)
+  (when (and (require 'org nil t) (require 'org-element nil t))
+    (let ((buf (generate-new-buffer " *soft-narrow-org-empty*")))
+      (unwind-protect
+          (with-current-buffer buf
+            (org-mode)
+            (insert "#+begin_center\n#+end_center\n")
+            (goto-char 1)
+            ;; Must not error
+            (soft-narrow-org-to-element)
+            (should (soft-narrow-active-p))
+            (let ((intersection (soft-narrow--compute-intersection)))
+              (should intersection)
+              (should (= (car intersection) 1))))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
+;; Org Lazy-Load Test
+;; Regression: on `emacs -Q', org-narrow commands fail with `void-function'
+;; because org is not loaded; the org commands must `require' it themselves.
+
+(ert-deftest soft-narrow-org-commands-load-dependencies ()
+  "Test that org commands work without pre-loading org.
+Oracle-identified gap: on `emacs -Q', org-narrow commands
+fails with `void-function' because org is not loaded."
+  (skip-unless (locate-library "org"))
+  (skip-unless (locate-library "org-element"))
+  (let ((buf (generate-new-buffer " *soft-narrow-org-load-test*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (insert "* Heading\nsome text\n")
+          (goto-char (point-min))
+          ;; org-to-subtree should load org automatically
+          (soft-narrow-org-to-subtree)
+          (should (soft-narrow-active-p))
+          (soft-narrow-widen)
+          ;; org-to-block should load org automatically
+          (insert "#+begin_example\nblock text\n#+end_example\n")
+          (goto-char (point-min))
+          (forward-line 1)
+          (soft-narrow-org-to-block)
+          (should (soft-narrow-active-p))
+          (soft-narrow-widen))
+      (kill-buffer buf))))
+
 (provide 'soft-narrow-test)
 
 ;;; soft-narrow-test.el ends here
