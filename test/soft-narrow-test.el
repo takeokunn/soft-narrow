@@ -2099,6 +2099,279 @@ Exercises the correction path where `beginning-of-defun' overshoots."
       (soft-narrow-test--cleanup-buffer buf))))
 
 
+;; Property Preservation Tests
+;; Oracle-identified gap: soft-narrow--apply-properties must not destroy
+;; existing text properties set by other packages.
+
+(ert-deftest soft-narrow-preserves-existing-read-only-property ()
+  "Test that existing `read-only' text properties survive narrow/widen cycle."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Set a read-only property at a specific position (simulating
+          ;; another package's state)
+          (put-text-property 150 200 'read-only t)
+          (soft-narrow-to-region 100 300)
+          (soft-narrow-widen)
+          ;; Original read-only property should still be present
+          (should (get-text-property 150 'read-only)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-preserves-existing-cursor-intangible-property ()
+  "Test that existing `cursor-intangible' properties survive narrow/widen cycle."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (put-text-property 250 300 'cursor-intangible t)
+          (soft-narrow-to-region 100 300)
+          (soft-narrow-widen)
+          ;; Original cursor-intangible property should survive
+          (should (get-text-property 250 'cursor-intangible)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-preserves-non-t-read-only-value ()
+  "Test that non-t `read-only' values (e.g., `'special) survive.
+Oracle-identified gap: `text-property-any ... t' missed non-t
+property values.  Now using `text-property-not-all'.
+This test verifies that a `read-only' value of `'other-package'
+survives the narrow/widen cycle."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (put-text-property 150 200 'read-only 'other-package)
+          (soft-narrow-to-region 50 300)
+          (soft-narrow-widen)
+          (should (eq 'other-package
+                      (get-text-property 150 'read-only))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-preserves-visible-region-properties-during-narrow ()
+  "Test that existing properties in the visible region survive during active narrow.
+Oracle-identified gap: `remove-list-of-text-properties' on the entire buffer
+stripped properties from the visible [l,r) region during active narrow.
+`soft-narrow--restore-visible-properties' now restores them."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Set a property inside what will be the visible region
+          (put-text-property 200 250 'read-only 'important)
+          (soft-narrow-to-region 100 300)
+          ;; Property should STILL be present during the narrow
+          (should (eq 'important
+                      (get-text-property 200 'read-only)))
+          (soft-narrow-widen)
+          ;; And after widen too
+          (should (eq 'important
+                      (get-text-property 200 'read-only))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-ownership-reset-on-external-mode-toggle ()
+  "Test that ownership is released when user toggles mode externally.
+When soft-narrow owns `cursor-intangible-mode' and the user manually
+turns it off, `cursor-intangible-mode-hook' detects the toggle and
+releases ownership immediately.  If the user then re-enables the mode,
+soft-narrow does NOT disable it on final widen because ownership
+was already released."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Soft-narrow enables cursor-intangible-mode and claims ownership
+          (soft-narrow-to-region 100 300)
+          (should (bound-and-true-p cursor-intangible-mode))
+          (should soft-narrow--owns-cursor-intangible)
+          ;; User manually disables the mode (external toggle)
+          (cursor-intangible-mode -1)
+          ;; Hook should have released ownership immediately
+          (should-not soft-narrow--owns-cursor-intangible)
+          ;; User re-enables the mode independently
+          (cursor-intangible-mode 1)
+          ;; Ownership was already released, so this is user-owned
+          (should-not soft-narrow--owns-cursor-intangible)
+          ;; Final widen: mode should survive since soft-narrow
+          ;; no longer owns it
+          (soft-narrow-widen)
+          (should (bound-and-true-p cursor-intangible-mode)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-ownership-reclaims-on-external-off ()
+  "Test that ownership is re-claimed when soft-narrow needs the mode again.
+If the user turns the mode off (ownership released via hook) but
+soft-narrow then needs it for another narrow, it re-enables and
+re-claims ownership."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 100 300)
+          (should soft-narrow--owns-cursor-intangible)
+          ;; User turns mode off
+          (cursor-intangible-mode -1)
+          (should-not soft-narrow--owns-cursor-intangible)
+          ;; Second narrow: soft-narrow needs the mode, enables it,
+          ;; claims fresh ownership
+          (soft-narrow-to-region 150 250)
+          (should soft-narrow--owns-cursor-intangible)
+          ;; Final widen should disable since we own it
+          (soft-narrow-widen)
+          (soft-narrow-widen)
+          (should-not (bound-and-true-p cursor-intangible-mode)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
+;; cursor-intangible-mode Ownership Tests
+
+(ert-deftest soft-narrow-preserves-pre-existing-cursor-intangible-mode ()
+  "Test that pre-existing `cursor-intangible-mode' is not disabled on widen.
+When the user enabled cursor-intangible-mode before soft-narrowing,
+soft-narrow must not turn it off after the final widen."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Simulate user enabling cursor-intangible-mode independently
+          (cursor-intangible-mode 1)
+          (should (bound-and-true-p cursor-intangible-mode))
+          (soft-narrow-to-region 100 300)
+          (soft-narrow-widen)
+          ;; Mode should still be active — soft-narrow didn't own it
+          (should (bound-and-true-p cursor-intangible-mode)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-stack-preserves-property-snapshot ()
+  "Test that property snapshot is captured only once across multiple narrows.
+After stacking multiple narrows and then fully widening, original properties
+must be restored correctly."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Set a property before any narrowing
+          (put-text-property 150 200 'read-only t)
+          ;; Stack two narrows
+          (soft-narrow-to-region 100 400)
+          (soft-narrow-to-region 200 350)
+          ;; Pop them all
+          (soft-narrow-widen)
+          (soft-narrow-widen)
+          ;; Original property should be intact
+          (should (get-text-property 150 'read-only)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-marker-tracks-property-after-insertion ()
+  "Test that markers track property positions after insertion in visible region.
+Oracle-identified gap: absolute positions become stale when text is
+inserted in the visible region during narrow.  Markers with insertion
+type t fix this by tracking the original text."
+  (let ((buf (soft-narrow-test--create-test-buffer 10)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((before-end (point-max)))
+            ;; Place a property in the after-region (past the narrow point)
+            (put-text-property (- before-end 40) (- before-end 20)
+                               'read-only 'external)
+            ;; Narrow to a region in the middle
+            (soft-narrow-to-region 30 100)
+            ;; Insert text inside the visible region — shifts everything after
+            (goto-char 60)
+            (insert "XXXXX")
+            ;; Widen — marker-tracked property should be at shifted position
+            (soft-narrow-widen)
+            (should (eq 'external
+                        (get-text-property (- (point-max) 40)
+                                           'read-only)))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-marker-insertion-at-exact-position ()
+  "Test that markers survive insertion AT the saved position.
+Oracle-identified gap: `copy-marker' with default nil insertion type
+stays at the insertion point when text is inserted AT the marker.
+With insertion type t, the marker moves with the original text."
+  (let ((buf (generate-new-buffer " *soft-narrow-marker-insert-at*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "abcdef")
+          (put-text-property 3 4 'cursor-intangible 'external)
+          (soft-narrow-to-region 2 6)
+          (goto-char 3)
+          (insert "X")
+          (soft-narrow-widen)
+          ;; Original char 'c' moved to position 4; X inserted at 3.
+          ;; Marker with insertion type t follows the original text.
+          (should (eq 'external (get-text-property 4 'cursor-intangible)))
+          ;; Inserted X at position 3 should NOT have the property
+          (should-not (get-text-property 3 'cursor-intangible)))
+      (kill-buffer buf))))
+
+;; Cache Refresh After Edit Tests
+;; Regression: editing inside the visible region shifts the stack markers,
+;; so the cached integer intersection must be refreshed via
+;; `after-change-functions'; otherwise `soft-narrow--clamp-point' and
+;; `soft-narrow--guard-boundary' use stale bounds.
+
+(ert-deftest soft-narrow-cache-refresh-after-insert ()
+  "Test that inserting inside the region refreshes the cached intersection.
+Without the refresh, `soft-narrow--clamp-point' would pull the cursor
+back to the old end boundary even though the region grew."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+          (should (equal soft-narrow--cached-intersection '(200 . 400)))
+          ;; Insert 10 chars inside the visible region
+          (goto-char 300)
+          (insert "XXXXXXXXXX")
+          ;; Cache must now reflect the shifted end marker
+          (should (equal soft-narrow--cached-intersection '(200 . 410)))
+          ;; A cursor at 405 (newly visible) must NOT be clamped back
+          (goto-char 405)
+          (soft-narrow--clamp-point)
+          (should (= (point) 405)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-cache-refresh-after-delete ()
+  "Test that deleting inside the region refreshes the cached intersection."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+          (goto-char 250)
+          (delete-char 20)
+          ;; End marker shrank by 20; cache must follow
+          (should (equal soft-narrow--cached-intersection '(200 . 380)))
+          ;; Cursor at the old end (399) is now outside; clamp to new r-1
+          (goto-char 385)
+          (soft-narrow--clamp-point)
+          (should (= (point) 379)))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-guard-uses-refreshed-bounds ()
+  "Test that the boundary guard respects bounds updated after an edit.
+After growing the region by editing inside it, movement toward the new
+end must NOT be suppressed."
+  (let ((buf (soft-narrow-test--create-test-buffer 100)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 200 400)
+          (goto-char 300)
+          (insert "YYYYYYYYYY")
+          ;; 405 is now well inside the region (200..410)
+          (goto-char 405)
+          (let ((this-command 'forward-char))
+            (soft-narrow--guard-boundary)
+            (should (eq this-command 'forward-char))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+(ert-deftest soft-narrow-cache-refresh-hook-cleanup ()
+  "Test that the `after-change-functions' refresh hook is removed on widen."
+  (let ((buf (soft-narrow-test--create-test-buffer 50)))
+    (unwind-protect
+        (with-current-buffer buf
+          (soft-narrow-to-region 100 300)
+          (should (memq #'soft-narrow--refresh-intersection
+                        (buffer-local-value 'after-change-functions buf)))
+          (soft-narrow-widen)
+          (should-not (memq #'soft-narrow--refresh-intersection
+                            (buffer-local-value 'after-change-functions buf))))
+      (soft-narrow-test--cleanup-buffer buf))))
+
+
 ;; Real-Restriction Preservation Tests
 ;; Regression: `soft-narrow-to-defun' / `soft-narrow-to-page' must not
 ;; discard a user's real `narrow-to-region' restriction via a bare `widen'.

@@ -109,7 +109,39 @@ Each frame is a cons (START-MARKER . END-MARKER).")
 (defvar-local soft-narrow--cached-intersection nil
   "Cached result of `soft-narrow--compute-intersection'.
 A cons (START . END) when valid, nil otherwise.
-Invalidated by `soft-narrow--apply-properties'.")
+Recomputed by `soft-narrow--apply-properties' on narrow/widen and by
+`soft-narrow--refresh-intersection' from `after-change-functions' after
+edits inside the visible region (markers shift, so the cached integer
+bounds must be refreshed to keep `soft-narrow--guard-boundary' and
+`soft-narrow--clamp-point' accurate).")
+
+(defvar-local soft-narrow--property-snapshot nil
+  "Saved original text property state for restoration on final widen.
+Captured once on the first `soft-narrow-to-region' call, restored when
+all narrowing levels are popped.  Nil or `empty' when no properties
+were set at capture time.")
+
+(defvar-local soft-narrow--owns-cursor-intangible nil
+  "Non-nil if soft-narrow enabled `cursor-intangible-mode' in this buffer.
+Prevents `soft-narrow-widen' from disabling a mode the user or another
+package enabled independently.  External toggles are detected via
+`cursor-intangible-mode-hook' and reset ownership immediately.")
+
+(defvar-local soft-narrow--toggling-cursor-intangible nil
+  "Non-nil while soft-narrow is enabling/disabling `cursor-intangible-mode'.
+Suppresses the `cursor-intangible-mode-hook' ownership-reset to avoid
+false positives.")
+
+(defun soft-narrow--on-cursor-intangible-mode-change ()
+  "Detect external toggling of `cursor-intangible-mode'.
+Added to `cursor-intangible-mode-hook' while narrowed.  When the mode is
+turned off and soft-narrow previously owned it, release ownership
+immediately so that subsequent user re-enables are not incorrectly
+disabled on final widen."
+  (unless soft-narrow--toggling-cursor-intangible
+    (when (and soft-narrow--owns-cursor-intangible
+               (not (bound-and-true-p cursor-intangible-mode)))
+      (setq soft-narrow--owns-cursor-intangible nil))))
 
 ;;;###autoload
 (defun soft-narrow-active-p ()
@@ -169,19 +201,101 @@ Return (START . END) for valid intersection, or nil if no valid intersection."
     (delete-overlay soft-narrow--after-overlay)
     (setq soft-narrow--after-overlay nil)))
 
+(defun soft-narrow--capture-property-state ()
+  "Capture original text property state for later restoration.
+Records positions (as markers that track buffer edits) where `read-only',
+`cursor-intangible', `front-sticky', or `rear-nonsticky' have non-nil
+values (any non-nil, not just t).  Uses `text-property-not-all' as a
+fast-path for the common case where no such properties exist."
+  (unless soft-narrow--property-snapshot
+    (let ((props '(read-only cursor-intangible front-sticky rear-nonsticky)))
+      (if (or (text-property-not-all (point-min) (point-max) 'read-only nil)
+              (text-property-not-all (point-min) (point-max) 'cursor-intangible nil)
+              (text-property-not-all (point-min) (point-max) 'front-sticky nil)
+              (text-property-not-all (point-min) (point-max) 'rear-nonsticky nil))
+          ;; Properties found — build snapshot with markers so positions
+          ;; track buffer edits (e.g., insertion in visible region).
+          (let ((state nil)
+                (max (point-max))
+                (pos (point-min)))
+            (while (< pos max)
+              (let ((vals nil))
+                (dolist (p props)
+                  (let ((v (get-text-property pos p)))
+                    (when v (push (cons p v) vals))))
+                (when vals
+                  (push (cons (copy-marker pos t) (nreverse vals)) state)))
+              (setq pos (1+ pos)))
+            (setq soft-narrow--property-snapshot (or (nreverse state)
+                                                     'empty)))
+        ;; Nothing to save — common case
+        (setq soft-narrow--property-snapshot 'empty)))))
+
+(defun soft-narrow--restore-property-state ()
+  "Restore text properties from snapshot, free markers, then clear snapshot."
+  (when soft-narrow--property-snapshot
+    (unless (eq soft-narrow--property-snapshot 'empty)
+      (with-silent-modifications
+        (dolist (entry soft-narrow--property-snapshot)
+          (let ((marker (car entry))
+                (mpos (marker-position (car entry))))
+            (when mpos
+              (dolist (pv (cdr entry))
+                (put-text-property mpos (1+ mpos) (car pv) (cdr pv))))
+            (set-marker marker nil)))))
+    (setq soft-narrow--property-snapshot nil)))
+
+(defun soft-narrow--restore-visible-properties (l r)
+  "Restore original properties to the visible region [L, R).
+Called after `remove-list-of-text-properties' on the entire buffer,
+so that other packages' text properties in the visible region are
+preserved during the narrow rather than being stripped.
+Uses marker positions so buffer edits before this call are tracked."
+  (when (and soft-narrow--property-snapshot
+             (not (eq soft-narrow--property-snapshot 'empty)))
+    (with-silent-modifications
+      (dolist (entry soft-narrow--property-snapshot)
+        (let* ((marker (car entry))
+               (mpos (marker-position marker)))
+          (when (and mpos (>= mpos l) (< mpos r))
+            (dolist (pv (cdr entry))
+             (put-text-property mpos (1+ mpos) (car pv) (cdr pv)))))))))
+
 (defun soft-narrow--apply-properties ()
   "Apply narrowing properties based on current intersection.
 Blocked regions get overlay face for visual deemphasis, plus
 text properties for cursor restriction and read-only protection.
 Also manages buffer-local hooks: a `pre-command-hook' to suppress
-boundary-crossing movements and a `post-command-hook' for clamping."
+boundary-crossing movements and a `post-command-hook' for clamping.
+Saves original property state before first narrow and restores it
+on final widen to avoid destroying properties set by other packages."
   (let ((intersection (soft-narrow--compute-intersection)))
     (setq soft-narrow--cached-intersection intersection)
     (if-let* ((l (car intersection))
               (r (cdr intersection)))
         (progn
+          ;; Capture original property state before first modification
+          (soft-narrow--capture-property-state)
+          ;; Enable cursor-intangible-mode if not already active;
+          ;; track ownership so we only disable it on final widen
+          ;; if SOFT-NARROW was the one that enabled it.
+          ;; External toggles are detected in real-time via
+          ;; `cursor-intangible-mode-hook' (see
+          ;; `soft-narrow--on-cursor-intangible-mode-change').
           (unless (bound-and-true-p cursor-intangible-mode)
-            (cursor-intangible-mode 1))
+            (let ((soft-narrow--toggling-cursor-intangible t))
+              (setq soft-narrow--owns-cursor-intangible t)
+              (cursor-intangible-mode 1)))
+          ;; Install hook so external mode toggles release ownership
+          (add-hook 'cursor-intangible-mode-hook
+                    #'soft-narrow--on-cursor-intangible-mode-change nil t)
+          ;; Apply properties to blocked regions.
+          ;; We use remove-list-of-text-properties on the entire buffer
+          ;; followed by add-text-properties on blocked regions because
+          ;; successive narrows may change which regions are blocked vs.
+          ;; visible.  After applying, we restore original property
+          ;; values to the visible region so other packages' text
+          ;; properties are preserved during the narrow.
           (with-silent-modifications
             (remove-list-of-text-properties
              (point-min) (point-max)
@@ -191,21 +305,42 @@ boundary-crossing movements and a `post-command-hook' for clamping."
                                    rear-nonsticky (cursor-intangible)
                                    front-sticky (cursor-intangible)))
             (add-text-properties r (point-max)
-                                 '(cursor-intangible t read-only t)))
+                                 '(cursor-intangible t read-only t))
+            ;; Restore original properties to the visible region [l, r)
+            ;; so that other packages' text properties survive the narrow.
+            (soft-narrow--restore-visible-properties l r))
           (soft-narrow--show-overlays l r)
           (add-hook 'pre-command-hook #'soft-narrow--guard-boundary nil t)
           ;; Depth 10 ensures this runs after cursor-intangible-mode (depth 0).
-          (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t))
-      ;; No valid intersection - clear all properties
+          (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t)
+          ;; Refresh cached bounds after edits inside the visible region,
+          ;; whose stack markers shift while the cache holds stale integers.
+          (add-hook 'after-change-functions
+                    #'soft-narrow--refresh-intersection nil t))
+      ;; No valid intersection — final widen: restore original state
       (soft-narrow--hide-overlays)
       (with-silent-modifications
         (remove-list-of-text-properties
          (point-min) (point-max)
          '(cursor-intangible read-only front-sticky rear-nonsticky))
-        (when (bound-and-true-p cursor-intangible-mode)
-          (cursor-intangible-mode -1)))
+        ;; Restore any original property values that were captured
+        ;; before the first soft-narrow.
+        (soft-narrow--restore-property-state)
+        ;; Only disable cursor-intangible-mode if soft-narrow
+        ;; was the one that enabled it AND the mode is still on
+        ;; (ownership may have been released by external toggle).
+        (when (and soft-narrow--owns-cursor-intangible
+                   (bound-and-true-p cursor-intangible-mode))
+          (let ((soft-narrow--toggling-cursor-intangible t))
+            (setq soft-narrow--owns-cursor-intangible nil)
+            (cursor-intangible-mode -1))))
+      ;; Remove hook in case ownership was released before widen
+      (remove-hook 'cursor-intangible-mode-hook
+                   #'soft-narrow--on-cursor-intangible-mode-change t)
       (remove-hook 'pre-command-hook #'soft-narrow--guard-boundary t)
-      (remove-hook 'post-command-hook #'soft-narrow--clamp-point t))))
+      (remove-hook 'post-command-hook #'soft-narrow--clamp-point t)
+      (remove-hook 'after-change-functions
+                   #'soft-narrow--refresh-intersection t))))
 
 (defun soft-narrow--guard-boundary ()
   "Suppress movement commands that would leave the narrowed region.
@@ -238,6 +373,16 @@ Added to `post-command-hook' as a buffer-local hook."
     (cond
      ((< (point) l) (goto-char l))
      ((>= (point) r) (goto-char (max l (1- r)))))))
+
+(defun soft-narrow--refresh-intersection (&rest _)
+  "Recompute `soft-narrow--cached-intersection' from the current markers.
+Added to `after-change-functions' while narrowing is active.  Editing
+inside the visible region shifts the stack markers, so the cached integer
+bounds go stale; refreshing here keeps `soft-narrow--guard-boundary' and
+`soft-narrow--clamp-point' from clamping the cursor to outdated
+boundaries.  Runs only on genuine buffer changes, so per-keystroke motion
+still reads the cache in O(1)."
+  (setq soft-narrow--cached-intersection (soft-narrow--compute-intersection)))
 
 ;;;###autoload
 (defun soft-narrow-to-region (start end)
