@@ -44,6 +44,18 @@ Each line is numbered for easy reference."
                    (eq (overlay-get ov 'face) face)))
             (overlays-at pos)))
 
+(defmacro soft-narrow-test--with-buffer (lines var &rest body)
+  "Bind VAR to a fresh LINES-line test buffer and run BODY in it.
+The buffer is created via `soft-narrow-test--create-test-buffer' and
+always cleaned up via `soft-narrow-test--cleanup-buffer', even if BODY
+signals an error."
+  (declare (indent 2) (debug t))
+  `(let ((,var (soft-narrow-test--create-test-buffer ,lines)))
+     (unwind-protect
+         (with-current-buffer ,var
+           ,@body)
+       (soft-narrow-test--cleanup-buffer ,var))))
+
 (provide 'soft-narrow-test-helpers)
 
 ;;; soft-narrow-test-helpers.el ends here

@@ -225,6 +225,13 @@ Return (START . END) for valid intersection, or nil if no valid intersection."
     (delete-overlay soft-narrow--after-overlay)
     (setq soft-narrow--after-overlay nil)))
 
+(defconst soft-narrow--managed-text-properties
+  '(read-only cursor-intangible front-sticky rear-nonsticky)
+  "Text properties soft-narrow captures, applies, and restores.
+Shared by `soft-narrow--capture-property-state' and
+`soft-narrow--apply-properties' so the tracked property set stays in
+one place.")
+
 (defun soft-narrow--capture-property-state ()
   "Capture original text property state for later restoration.
 Records positions (as markers that track buffer edits) where `read-only',
@@ -232,7 +239,7 @@ Records positions (as markers that track buffer edits) where `read-only',
 values (any non-nil, not just t).  Uses `text-property-not-all' as a
 fast-path for the common case where no such properties exist."
   (unless soft-narrow--property-snapshot
-    (let ((props '(read-only cursor-intangible front-sticky rear-nonsticky)))
+    (let ((props soft-narrow--managed-text-properties))
       (if (or (text-property-not-all (point-min) (point-max) 'read-only nil)
               (text-property-not-all (point-min) (point-max) 'cursor-intangible nil)
               (text-property-not-all (point-min) (point-max) 'front-sticky nil)
@@ -255,18 +262,26 @@ fast-path for the common case where no such properties exist."
         ;; Nothing to save — common case
         (setq soft-narrow--property-snapshot 'empty)))))
 
+(defun soft-narrow--restore-properties-in-range (snapshot &optional l r)
+  "Restore text properties recorded in SNAPSHOT, optionally limited to [L, R).
+SNAPSHOT is a list of (MARKER . PROPERTY-VALUE-ALIST) entries as captured
+by `soft-narrow--capture-property-state'.  When L and R are both non-nil,
+only entries whose marker position falls in [L, R) are restored;
+otherwise every entry with a live marker is restored."
+  (dolist (entry snapshot)
+    (let ((mpos (marker-position (car entry))))
+      (when (and mpos (or (null l) (and (>= mpos l) (< mpos r))))
+        (dolist (pv (cdr entry))
+          (put-text-property mpos (1+ mpos) (car pv) (cdr pv)))))))
+
 (defun soft-narrow--restore-property-state ()
   "Restore text properties from snapshot, free markers, then clear snapshot."
   (when soft-narrow--property-snapshot
     (unless (eq soft-narrow--property-snapshot 'empty)
       (with-silent-modifications
+        (soft-narrow--restore-properties-in-range soft-narrow--property-snapshot)
         (dolist (entry soft-narrow--property-snapshot)
-          (let ((marker (car entry))
-                (mpos (marker-position (car entry))))
-            (when mpos
-              (dolist (pv (cdr entry))
-                (put-text-property mpos (1+ mpos) (car pv) (cdr pv))))
-            (set-marker marker nil)))))
+          (set-marker (car entry) nil))))
     (setq soft-narrow--property-snapshot nil)))
 
 (defun soft-narrow--restore-visible-properties (l r)
@@ -278,12 +293,16 @@ Uses marker positions so buffer edits before this call are tracked."
   (when (and soft-narrow--property-snapshot
              (not (eq soft-narrow--property-snapshot 'empty)))
     (with-silent-modifications
-      (dolist (entry soft-narrow--property-snapshot)
-        (let* ((marker (car entry))
-               (mpos (marker-position marker)))
-          (when (and mpos (>= mpos l) (< mpos r))
-            (dolist (pv (cdr entry))
-             (put-text-property mpos (1+ mpos) (car pv) (cdr pv)))))))))
+      (soft-narrow--restore-properties-in-range soft-narrow--property-snapshot l r))))
+
+(defun soft-narrow--set-cursor-intangible-ownership (enable)
+  "Toggle `cursor-intangible-mode' per ENABLE while tracking ownership.
+Binds `soft-narrow--toggling-cursor-intangible' so
+`soft-narrow--on-cursor-intangible-mode-change' does not mistake this
+internal toggle for an external one."
+  (let ((soft-narrow--toggling-cursor-intangible t))
+    (setq soft-narrow--owns-cursor-intangible enable)
+    (cursor-intangible-mode (if enable 1 -1))))
 
 (defun soft-narrow--apply-properties ()
   "Apply narrowing properties based on current intersection.
@@ -307,9 +326,7 @@ on final widen to avoid destroying properties set by other packages."
           ;; `cursor-intangible-mode-hook' (see
           ;; `soft-narrow--on-cursor-intangible-mode-change').
           (unless (bound-and-true-p cursor-intangible-mode)
-            (let ((soft-narrow--toggling-cursor-intangible t))
-              (setq soft-narrow--owns-cursor-intangible t)
-              (cursor-intangible-mode 1)))
+            (soft-narrow--set-cursor-intangible-ownership t))
           ;; Install hook so external mode toggles release ownership
           (add-hook 'cursor-intangible-mode-hook
                     #'soft-narrow--on-cursor-intangible-mode-change nil t)
@@ -323,7 +340,7 @@ on final widen to avoid destroying properties set by other packages."
           (with-silent-modifications
             (remove-list-of-text-properties
              (point-min) (point-max)
-             '(cursor-intangible read-only front-sticky rear-nonsticky))
+             soft-narrow--managed-text-properties)
             (add-text-properties (point-min) l
                                  '(cursor-intangible t read-only t
                                    rear-nonsticky (cursor-intangible)
@@ -346,7 +363,7 @@ on final widen to avoid destroying properties set by other packages."
       (with-silent-modifications
         (remove-list-of-text-properties
          (point-min) (point-max)
-         '(cursor-intangible read-only front-sticky rear-nonsticky))
+         soft-narrow--managed-text-properties)
         ;; Restore any original property values that were captured
         ;; before the first soft-narrow.
         (soft-narrow--restore-property-state)
@@ -355,9 +372,7 @@ on final widen to avoid destroying properties set by other packages."
         ;; (ownership may have been released by external toggle).
         (when (and soft-narrow--owns-cursor-intangible
                    (bound-and-true-p cursor-intangible-mode))
-          (let ((soft-narrow--toggling-cursor-intangible t))
-            (setq soft-narrow--owns-cursor-intangible nil)
-            (cursor-intangible-mode -1))))
+          (soft-narrow--set-cursor-intangible-ownership nil)))
       ;; Remove hook in case ownership was released before widen
       (remove-hook 'cursor-intangible-mode-hook
                    #'soft-narrow--on-cursor-intangible-mode-change t)
