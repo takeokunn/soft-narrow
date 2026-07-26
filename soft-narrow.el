@@ -90,8 +90,7 @@
 (progn
   (with-no-warnings
     (defvar org-element-greater-elements))
-  (defvar cursor-intangible-mode)
-  (defvar cursor-intangible-mode-hook nil))
+  (require 'cursor-sensor))
 
 ;; Org-mode macro (needed at compile time for macro expansion)
 (eval-when-compile
