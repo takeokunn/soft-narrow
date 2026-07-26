@@ -5,8 +5,6 @@ LOAD_PATH = -L . -L test
 SRC = soft-narrow.el
 TEST_SRC = test/soft-narrow-test.el
 
-PACKAGE_INIT = --eval "(progn (require 'package) (push '(\"melpa\" . \"https://melpa.org/packages/\") package-archives) (package-initialize) (unless (package-installed-p 'package-lint) (package-refresh-contents) (package-install 'package-lint)))"
-
 .PHONY: all compile test lint package-lint autoloads clean
 
 all: compile
@@ -31,8 +29,7 @@ lint:
 
 package-lint:
 	$(BATCH) $(LOAD_PATH) \
-	  $(PACKAGE_INIT) \
-	  -l package-lint \
+	  --eval "(require 'package-lint)" \
 	  -f package-lint-batch-and-exit $(SRC)
 
 clean:

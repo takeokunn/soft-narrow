@@ -28,7 +28,11 @@
 
 (require 'ert)
 (require 'soft-narrow)
+
+(require 'cursor-sensor)
 (require 'soft-narrow-test-helpers)
+
+(declare-function org-export-as "ox" (backend &optional subtreep visible-only body-only ext-plist))
 
 
 ;; Basic Functionality Tests
@@ -76,22 +80,22 @@
     (should-not (soft-narrow-test--has-overlay-face-at 300 'soft-narrow-blocked-face))
 
     ;; Check read-only property before region
-    (should (get-text-property 50 'read-only))
+    (should (get-char-property 50 'read-only))
 
     ;; Check read-only property after region
-    (should (get-text-property 500 'read-only))
+    (should (get-char-property 500 'read-only))
 
     ;; Check no read-only inside region
-    (should-not (get-text-property 300 'read-only))
+    (should-not (get-char-property 300 'read-only))
 
     ;; Check cursor-intangible property before region
-    (should (get-text-property 50 'cursor-intangible))
+    (should (get-char-property 50 'cursor-intangible))
 
     ;; Check cursor-intangible property after region
-    (should (get-text-property 500 'cursor-intangible))
+    (should (get-char-property 500 'cursor-intangible))
 
     ;; Check no cursor-intangible inside region
-    (should-not (get-text-property 300 'cursor-intangible))
+    (should-not (get-char-property 300 'cursor-intangible))
 
     ;; Check face property (now on overlay, not text property)
     (should (soft-narrow-test--has-overlay-face-at 50 'soft-narrow-blocked-face))))
@@ -209,12 +213,12 @@
     (soft-narrow-to-region 200 400)
 
     ;; Check that cursor-intangible property is set
-    (should (get-text-property 100 'cursor-intangible))
-    (should (get-text-property 150 'cursor-intangible))
+    (should (get-char-property 100 'cursor-intangible))
+    (should (get-char-property 150 'cursor-intangible))
     ;; Should be set up to the narrow region
-    (should (get-text-property 199 'cursor-intangible))
+    (should (get-char-property 199 'cursor-intangible))
     ;; Should not be set inside the narrow region
-    (should-not (get-text-property 200 'cursor-intangible))))
+    (should-not (get-char-property 200 'cursor-intangible))))
 
 (ert-deftest soft-narrow-cursor-intangible-after ()
   "Test that cursor-intangible property is set after narrowed region."
@@ -222,12 +226,12 @@
     (soft-narrow-to-region 200 400)
 
     ;; Check that cursor-intangible property is set
-    (should (get-text-property 500 'cursor-intangible))
-    (should (get-text-property 450 'cursor-intangible))
+    (should (get-char-property 500 'cursor-intangible))
+    (should (get-char-property 450 'cursor-intangible))
     ;; Should be set from the end of narrow region
-    (should (get-text-property 400 'cursor-intangible))
+    (should (get-char-property 400 'cursor-intangible))
     ;; Should not be set inside the narrow region
-    (should-not (get-text-property 399 'cursor-intangible))))
+    (should-not (get-char-property 399 'cursor-intangible))))
 
 (ert-deftest soft-narrow-cursor-free-inside ()
   "Test that cursor can move freely inside narrowed region."
@@ -310,13 +314,13 @@
 (ert-deftest soft-narrow-invalid-bounds ()
   "Test that out-of-range bounds are clamped to buffer boundaries."
   (soft-narrow-test--with-buffer 10 buf
-    ;; Bounds beyond buffer are clamped to point-min/point-max
-    (soft-narrow-to-region 100 1000)
-    (should (soft-narrow-active-p))
-    ;; End should be clamped to point-max
-    (let ((intersection (soft-narrow--compute-intersection)))
-      (should (= (car intersection) 100))
-      (should (= (cdr intersection) (point-max))))))
+				 ;; Bounds beyond buffer are clamped to point-min/point-max
+				 (soft-narrow-to-region 100 1000)
+				 (should (soft-narrow-active-p))
+				 ;; End should be clamped to point-max
+				 (let ((intersection (soft-narrow--compute-intersection)))
+				   (should (= (car intersection) 100))
+				   (should (= (cdr intersection) (point-max))))))
 
 (ert-deftest soft-narrow-invisibility-spec-t ()
   "Test that buffer-invisibility-spec t is not disrupted."
@@ -344,9 +348,9 @@
 
       ;; No text should be read-only inside the buffer
       ;; Check a few positions
-      (should-not (get-text-property 100 'read-only))
-      (should-not (get-text-property 500 'read-only))
-      (should-not (get-text-property 1000 'read-only)))))
+      (should-not (get-char-property 100 'read-only))
+      (should-not (get-char-property 500 'read-only))
+      (should-not (get-char-property 1000 'read-only)))))
 
 (ert-deftest soft-narrow-single-point ()
   "Test narrowing to single point."
@@ -361,8 +365,8 @@
     (should (soft-narrow-test--has-overlay-face-at 300 'soft-narrow-blocked-face))
 
     ;; Everything should be read-only
-    (should (get-text-property 1 'read-only))
-    (should (get-text-property 300 'read-only))))
+    (should (get-char-property 1 'read-only))
+    (should (get-char-property 300 'read-only))))
 
 (ert-deftest soft-narrow-reverse-arguments ()
   "Test narrowing with reversed start/end arguments."
@@ -379,8 +383,8 @@
   "Test multiple rapid narrow/widen cycles."
   (soft-narrow-test--with-buffer 100 buf
     ;; Perform multiple cycles
-    (dotimes (_ 10)
-      (soft-narrow-to-region (* (+ _ 1) 10) (* (+ _ 1) 20))
+    (dotimes (cycle 10)
+      (soft-narrow-to-region (* (+ cycle 1) 10) (* (+ cycle 1) 20))
       (should (soft-narrow-active-p))
       (soft-narrow-widen)
       (should-not (soft-narrow-active-p)))
@@ -423,24 +427,20 @@
           ;; because the buffer size increased and marker has insertion-type t
           (should (> (marker-position (cdar soft-narrow--stack)) 400))
 
-          ;; Verify start marker didn't move
-          (should (= (marker-position (caar soft-narrow--stack)) 200))))
-    (soft-narrow-test--cleanup-buffer buf)))
+          ;; Verify start marker did not move
+          (should (= (marker-position (caar soft-narrow--stack)) 200)))
+      (soft-narrow-test--cleanup-buffer buf))))
 
-(ert-deftest soft-narrow-intersection-with-no-overlap ()
-  "Test narrowing with regions that don't overlap returns nil."
+(ert-deftest soft-narrow-disjoint-intersection-pop-restores-prior-frame ()
+  "Test that popping a disjoint frame restores the prior visible interval."
   (soft-narrow-test--with-buffer 200 buf
-    ;; First narrow: 100-200
     (soft-narrow-to-region 100 200)
-
-    ;; Second narrow: 300-400 (no overlap)
     (soft-narrow-to-region 300 400)
-
-    ;; Intersection should be nil when regions don't overlap
-    ;; max(100,300) = 300, min(200,400) = 200
-    ;; Since 300 > 200, there is no valid intersection
-    (let ((intersection (soft-narrow--compute-intersection)))
-      (should-not intersection))))
+    (should (equal (soft-narrow-region-bounds) (quote (300 . 300))))
+    (soft-narrow-widen)
+    (should (equal (soft-narrow-region-bounds) (quote (100 . 200))))
+    (should-not (get-char-property 150 (quote read-only)))
+    (should (get-char-property 300 (quote read-only)))))
 
 
 ;; Property Cleanup Tests
@@ -452,48 +452,56 @@
 
     ;; Verify properties are set
     (should (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
-    (should (get-text-property 100 'read-only))
-    (should (get-text-property 100 'cursor-intangible))
+    (should (get-char-property 100 'read-only))
+    (should (get-char-property 100 'cursor-intangible))
 
     (soft-narrow-widen)
 
     ;; Verify all properties are removed
     (should-not (soft-narrow-test--has-overlay-face-at 100 'soft-narrow-blocked-face))
-    (should-not (get-text-property 100 'read-only))
-    (should-not (get-text-property 100 'cursor-intangible))))
+    (should-not (get-char-property 100 'read-only))
+    (should-not (get-char-property 100 'cursor-intangible))))
 
 
 ;; Performance Tests
 
-(ert-deftest soft-narrow-performance-large-buffer ()
-  "Test performance on large buffer (>1000 lines)."
-  (soft-narrow-test--with-buffer 10000 buf
-    (let ((start (float-time)))
-      (soft-narrow-to-region 1000 5000)
+(ert-deftest soft-narrow-dense-large-buffer-has-constant-overlay-state ()
+  "Test 100k densely propertized characters use two overlays and no snapshot."
+  (let ((buf (generate-new-buffer " *soft-narrow-dense-large*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert (make-string 100000 ?x))
+          (dotimes (index 100000)
+            (put-text-property (1+ index) (+ index 2)
+                               (quote external-dense) (% index 2)))
+          (soft-narrow-to-region 25000 75000)
+          (should (= (length soft-narrow--stack) 1))
+          (should (= (seq-count
+                      (lambda (overlay) (overlay-get overlay (quote soft-narrow)))
+                      (overlays-in (point-min) (point-max)))
+                     2))
+          (should-not (boundp (quote soft-narrow--property-snapshot)))
+          (should (= (get-text-property 1000 (quote external-dense)) 1))
+          (soft-narrow-widen)
+          (should (= (get-text-property 1000 (quote external-dense)) 1)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
 
-      ;; Should complete in reasonable time (< 0.1 seconds)
-      (let ((elapsed (- (float-time) start)))
-        (should (< elapsed 0.1)))
-
-      ;; Should be properly narrowed
-      (should (soft-narrow-active-p))
-
-      ;; Widen should also be fast
-      (let ((widen-start (float-time)))
-        (soft-narrow-widen)
-        (should (< (- (float-time) widen-start) 0.1))))))
-
-(ert-deftest soft-narrow-performance-multiple-narrows ()
-  "Test performance of multiple successive narrows."
-  (soft-narrow-test--with-buffer 1000 buf
-    (let ((start (float-time)))
-      ;; Perform 10 narrows
-      (dotimes (i 10)
-        (soft-narrow-to-region (* (1+ i) 50) (* (1+ i) 100)))
-
-      ;; Total time should be reasonable
-      (let ((elapsed (- (float-time) start)))
-        (should (< elapsed 0.5))))))
+(ert-deftest soft-narrow-final-widen-cleanup-is-exception-safe ()
+  "Test final widen releases overlays and hooks even when mode cleanup signals."
+  (soft-narrow-test--with-buffer 100 buf
+    (soft-narrow-to-region 200 400)
+    (cl-letf (((symbol-function (quote soft-narrow--set-cursor-intangible-ownership))
+               (lambda (_enable) (error "cleanup failure"))))
+      (should-error (soft-narrow-widen) :type (quote error)))
+    (should-not soft-narrow--stack)
+    (should-not soft-narrow--before-overlay)
+    (should-not soft-narrow--after-overlay)
+    (should-not soft-narrow--owns-cursor-intangible)
+    (should-not (memq (function soft-narrow--guard-boundary) pre-command-hook))
+    (should-not (memq (function soft-narrow--clamp-point) post-command-hook))
+    (should-not (memq (function soft-narrow--refresh-intersection)
+                      after-change-functions))))
 
 (ert-deftest soft-narrow-performance-intersection-computation ()
   "Test performance of intersection computation with deep stack."
@@ -504,10 +512,10 @@
 
     (let ((start (float-time)))
       ;; Compute intersection
-      (let ((intersection (soft-narrow--compute-intersection)))
-        ;; Should be fast even with deep stack
-        (let ((elapsed (- (float-time) start)))
-          (should (< elapsed 0.01)))))))
+      (soft-narrow--compute-intersection)
+      ;; Should be fast even with deep stack
+      (let ((elapsed (- (float-time) start)))
+        (should (< elapsed 0.01))))))
 
 
 ;; Stack Management Tests
@@ -1008,43 +1016,26 @@
 
 ;; Inverted Intersection Fix Tests
 
-(ert-deftest soft-narrow-inverted-intersection-start-greater-than-end ()
-  "Test that non-overlapping regions return nil instead of inverted intersection."
+(ert-deftest soft-narrow-disjoint-intersection-has-zero-width-bounds ()
+  "Test that disjoint frames normalize to active zero-width bounds."
   (soft-narrow-test--with-buffer 200 buf
-    ;; First narrow: 100-200
-    (soft-narrow-to-region 100 200)
-
-    ;; Second narrow: 300-400 (no overlap)
-    (soft-narrow-to-region 300 400)
-
-    ;; Intersection should be nil for non-overlapping regions
-    ;; max(100, 300) = 300, min(200, 400) = 200
-    ;; Since 300 > 200, there is no valid intersection
-    (let ((intersection (soft-narrow--compute-intersection)))
-      (should-not intersection)
-      ;; When intersection is nil, no properties are applied
-      ;; This is the correct behavior for non-overlapping regions
-      )))
-
-(ert-deftest soft-narrow-inverted-intersection-property-application ()
-  "Test that non-overlapping regions don't apply properties (return nil)."
-  (soft-narrow-test--with-buffer 200 buf
-    ;; Create non-overlapping regions
     (soft-narrow-to-region 100 200)
     (soft-narrow-to-region 300 400)
+    (should (equal (soft-narrow--compute-intersection) (quote (300 . 300))))
+    (should (get-char-property 150 (quote cursor-intangible)))
+    (should (get-char-property 350 (quote cursor-intangible)))))
 
-    ;; With non-overlapping regions, intersection should be nil
-    ;; No properties should be applied (or they should be cleared)
-    (let ((intersection (soft-narrow--compute-intersection)))
-      (should-not intersection)
-
-      ;; This should not cause errors
-      ;; When intersection is nil, soft-narrow-to-region handles it gracefully
-      ;; by not applying any narrowing properties
-      (goto-char 150)
-      ;; Properties from previous narrowing may still be present until widen
-      ;; But no new properties are applied for invalid intersection
-      )))
+(ert-deftest soft-narrow-touching-intersection-blocks-entire-buffer ()
+  "Test that touching frames produce active zero-width bounds."
+  (soft-narrow-test--with-buffer 200 buf
+    (soft-narrow-to-region 100 200)
+    (soft-narrow-to-region 200 400)
+    (should (equal (soft-narrow--compute-intersection) (quote (200 . 200))))
+    (should (get-char-property 150 (quote read-only)))
+    (should (get-char-property 300 (quote read-only)))
+    (soft-narrow-widen)
+    (should-not (get-char-property 150 (quote read-only)))
+    (should (get-char-property 300 (quote read-only)))))
 
 
 ;; Boundary Conditions Tests
@@ -1332,11 +1323,10 @@
   (soft-narrow-test--with-buffer 10 buf
     (soft-narrow-to-region 20 80)
     (soft-narrow-to-region 30 70)
-    (let ((stack-size (length soft-narrow--stack)))
-      (soft-narrow-widen)
-      (soft-narrow-widen)
-      ;; Stack should be empty
-      (should-not soft-narrow--stack))))
+    (soft-narrow-widen)
+    (soft-narrow-widen)
+    ;; Stack should be empty
+    (should-not soft-narrow--stack)))
 
 (ert-deftest soft-narrow-security-buffer-isolation ()
   "Test that narrowing in one buffer does not affect other buffers."
@@ -1454,49 +1444,54 @@
 
 ;; Stickiness and Boundary Tests
 
-(ert-deftest soft-narrow-stickiness-before-region ()
-  "Test that rear-nonsticky is set on the before-region blocked text."
-  (soft-narrow-test--with-buffer 100 buf
-    (soft-narrow-to-region 200 400)
-
-    ;; Before-region should have rear-nonsticky for cursor-intangible
-    (let ((nonsticky (get-text-property 100 'rear-nonsticky)))
-      (should (memq 'cursor-intangible nonsticky)))))
-
-(ert-deftest soft-narrow-stickiness-after-region ()
-  "Test that front-sticky is NOT set on the after-region blocked text.
-The after-region relies on default front-nonsticky behavior so that
-`get-pos-property' at the end boundary returns nil, allowing the cursor
-to rest at the exact end position of the narrowed region."
-  (soft-narrow-test--with-buffer 100 buf
-    (soft-narrow-to-region 200 400)
-
-    ;; After-region should NOT have front-sticky
-    (should-not (get-text-property 500 'front-sticky))))
-
-(ert-deftest soft-narrow-stickiness-not-inside-region ()
-  "Test that stickiness properties are not set inside the narrowed region."
-  (soft-narrow-test--with-buffer 100 buf
-    (soft-narrow-to-region 200 400)
-
-    ;; Inside region should have no stickiness properties
-    (should-not (get-text-property 300 'front-sticky))
-    (should-not (get-text-property 300 'rear-nonsticky))))
-
-(ert-deftest soft-narrow-stickiness-cleanup-on-widen ()
-  "Test that stickiness properties are removed after final widen."
-  (soft-narrow-test--with-buffer 100 buf
-    (soft-narrow-to-region 200 400)
-
-    ;; Verify stickiness properties exist
-    (should (get-text-property 100 'rear-nonsticky))
-    (should-not (get-text-property 500 'front-sticky))
-
+(ert-deftest soft-narrow-preserves-external-property-added-while-active ()
+  "Test that an external text property added while active survives widen."
+  (soft-narrow-test--with-buffer 50 buf
+    (soft-narrow-to-region 100 300)
+    (let ((inhibit-read-only t))
+      (put-text-property 350 360 (quote external-flag) (quote added)))
     (soft-narrow-widen)
+    (should (eq (get-text-property 350 (quote external-flag)) (quote added)))))
 
-    ;; After widen, all stickiness properties should be gone
-    (should-not (get-text-property 100 'rear-nonsticky))
-    (should-not (get-text-property 500 'front-sticky))))
+(ert-deftest soft-narrow-preserves-external-property-change-while-active ()
+  "Test that changing an external text property while active survives widen."
+  (soft-narrow-test--with-buffer 50 buf
+    (put-text-property 350 360 (quote external-flag) (quote old))
+    (soft-narrow-to-region 100 300)
+    (let ((inhibit-read-only t))
+      (put-text-property 350 360 (quote external-flag) (quote new)))
+    (soft-narrow-widen)
+    (should (eq (get-text-property 350 (quote external-flag)) (quote new)))))
+
+(ert-deftest soft-narrow-property-bearing-last-char-deletion ()
+  "Test deleting a property-bearing last character before final widen."
+  (let ((buf (generate-new-buffer " *soft-narrow-delete-last*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "abcdef")
+          (put-text-property 6 7 (quote external-flag) (quote last))
+          (soft-narrow-to-region 2 5)
+          (let ((inhibit-read-only t))
+            (delete-region 6 7))
+          (soft-narrow-widen)
+          (should (equal (buffer-string) "abcde")))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(ert-deftest soft-narrow-property-bearing-middle-char-deletion ()
+  "Test deleting a property-bearing middle character before final widen."
+  (let ((buf (generate-new-buffer " *soft-narrow-delete-middle*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "abcdef")
+          (put-text-property 3 4 (quote external-flag) (quote middle))
+          (soft-narrow-to-region 2 5)
+          (goto-char 3)
+          (delete-char 1)
+          (soft-narrow-widen)
+          (should (equal (buffer-string) "abdef")))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
 
 (ert-deftest soft-narrow-boundary-intangible-exact ()
   "Test cursor-intangible boundaries are exact at narrowed region edges."
@@ -1504,53 +1499,36 @@ to rest at the exact end position of the narrowed region."
     (soft-narrow-to-region 200 400)
 
     ;; Position 199 (last char before region) should be intangible
-    (should (get-text-property 199 'cursor-intangible))
+    (should (get-char-property 199 'cursor-intangible))
     ;; Position 200 (first char of region) should NOT be intangible
-    (should-not (get-text-property 200 'cursor-intangible))
+    (should-not (get-char-property 200 'cursor-intangible))
     ;; Position 399 (last char of region) should NOT be intangible
-    (should-not (get-text-property 399 'cursor-intangible))
+    (should-not (get-char-property 399 'cursor-intangible))
     ;; Position 400 (first char after region) should be intangible
-    (should (get-text-property 400 'cursor-intangible))))
+    (should (get-char-property 400 'cursor-intangible))))
 
 (ert-deftest soft-narrow-boundary-get-pos-property ()
-  "Test that get-pos-property returns correct values at narrowed region boundaries.
-Position l (start of region) and r (end of region) should NOT be intangible,
-while positions just outside should be intangible."
+  "Test overlay-aware position properties at narrowed boundaries."
   (soft-narrow-test--with-buffer 100 buf
     (soft-narrow-to-region 200 400)
-
-    ;; Position 200 (start boundary) should NOT be intangible
-    (should-not (get-pos-property 200 'cursor-intangible))
-    ;; Position 400 (end boundary) should NOT be intangible
-    (should-not (get-pos-property 400 'cursor-intangible))
-    ;; Position just before start should be intangible
-    (should (get-pos-property 199 'cursor-intangible))
-    ;; Position just after end should be intangible
-    (should (get-pos-property 401 'cursor-intangible))))
+    (should-not (get-char-property 200 (quote cursor-intangible)))
+    (should (get-char-property 400 (quote cursor-intangible)))
+    (should (get-pos-property 199 (quote cursor-intangible)))
+    (should (get-pos-property 401 (quote cursor-intangible)))))
 
 (ert-deftest soft-narrow-stacked-boundary-get-pos-property ()
-  "Test get-pos-property at intersection boundaries through stack transitions.
-After narrowing to [100,300] then [200,400], the intersection is [200,300].
-After widening, the region should revert to [100,300]."
+  "Test overlay-aware boundary properties across stack transitions."
   (soft-narrow-test--with-buffer 100 buf
-    ;; First narrowing: [100, 300]
     (soft-narrow-to-region 100 300)
-    (should-not (get-pos-property 100 'cursor-intangible))
-    (should-not (get-pos-property 300 'cursor-intangible))
-    (should (get-pos-property 301 'cursor-intangible))
-
-    ;; Second narrowing: [200, 400] -> intersection [200, 300]
+    (should-not (get-char-property 100 (quote cursor-intangible)))
+    (should (get-char-property 300 (quote cursor-intangible)))
     (soft-narrow-to-region 200 400)
-    (should-not (get-pos-property 200 'cursor-intangible))
-    (should-not (get-pos-property 300 'cursor-intangible))
-    (should (get-pos-property 199 'cursor-intangible))
-    (should (get-pos-property 301 'cursor-intangible))
-
-    ;; Widen back to [100, 300]
+    (should-not (get-char-property 200 (quote cursor-intangible)))
+    (should (get-char-property 300 (quote cursor-intangible)))
+    (should (get-char-property 199 (quote cursor-intangible)))
     (soft-narrow-widen)
-    (should-not (get-pos-property 100 'cursor-intangible))
-    (should-not (get-pos-property 300 'cursor-intangible))
-    (should (get-pos-property 301 'cursor-intangible))))
+    (should-not (get-char-property 100 (quote cursor-intangible)))
+    (should (get-char-property 300 (quote cursor-intangible)))))
 
 (ert-deftest soft-narrow-boundary-end-at-point-max ()
   "Test get-pos-property when the narrowed region ends at point-max.
@@ -1567,29 +1545,43 @@ properties should be set beyond the narrowed region end."
       ;; End boundary (point-max) should not be intangible
       (should-not (get-pos-property size 'cursor-intangible))
       ;; No front-sticky at the end
-      (should-not (get-text-property (max (1- size) (point-min)) 'front-sticky)))))
+      (should-not (get-char-property (max (1- size) (point-min)) 'front-sticky)))))
 
 
 ;; Mode Deactivation and Cleanup Tests
 
-(ert-deftest soft-narrow-mode-deactivation-widens-all-buffers ()
-  "Test that disabling `soft-narrow-mode' widens all narrowed buffers."
+(ert-deftest soft-narrow-mode-deactivation-cleans-each-buffer-once ()
+  "Test global disable performs one bulk cleanup per active buffer."
   (let ((buf1 (soft-narrow-test--create-test-buffer 50))
-        (buf2 (soft-narrow-test--create-test-buffer 50)))
+        (buf2 (soft-narrow-test--create-test-buffer 50))
+        (calls nil)
+        (original (symbol-function (quote soft-narrow--cleanup))))
     (unwind-protect
         (progn
-          (with-current-buffer buf1
-            (soft-narrow-to-region 100 300))
-          (with-current-buffer buf2
-            (soft-narrow-to-region 50 200))
-          ;; Both should be narrowed
-          (should (with-current-buffer buf1 (soft-narrow-active-p)))
-          (should (with-current-buffer buf2 (soft-narrow-active-p)))
-          ;; Disable global mode
-          (soft-narrow-mode -1)
-          ;; Both should now be widened
-          (should-not (with-current-buffer buf1 (soft-narrow-active-p)))
-          (should-not (with-current-buffer buf2 (soft-narrow-active-p))))
+          (soft-narrow-mode 1)
+          (dolist (buf (list buf1 buf2))
+            (with-current-buffer buf
+              (soft-narrow-to-region 50 400)
+              (soft-narrow-to-region 100 350)
+              (soft-narrow-to-region 150 300)
+              (should (= (length soft-narrow--stack) 3))
+              (should (= (seq-count
+                          (lambda (overlay) (overlay-get overlay (quote soft-narrow)))
+                          (overlays-in (point-min) (point-max)))
+                         2))))
+          (cl-letf (((symbol-function (quote soft-narrow--cleanup))
+                     (lambda ()
+                       (push (current-buffer) calls)
+                       (funcall original))))
+            (soft-narrow-mode -1))
+          (dolist (buf (list buf1 buf2))
+            (should (= (seq-count (lambda (called) (eq called buf)) calls) 1))
+            (with-current-buffer buf
+              (should-not soft-narrow--stack)
+              (should (= (seq-count
+                          (lambda (overlay) (overlay-get overlay (quote soft-narrow)))
+                          (overlays-in (point-min) (point-max)))
+                         0)))))
       (soft-narrow-test--cleanup-buffer buf1)
       (soft-narrow-test--cleanup-buffer buf2))))
 
@@ -1717,14 +1709,7 @@ Exercises the correction path where `beginning-of-defun' overshoots."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
-(ert-deftest soft-narrow-hide-overlays-without-overlays ()
-  "Test that `soft-narrow--hide-overlays' is a no-op when no overlays exist."
-  (soft-narrow-test--with-buffer 10 buf
-    (should-not soft-narrow--before-overlay)
-    (should-not soft-narrow--after-overlay)
-    (soft-narrow--hide-overlays)          ; must not error
-    (should-not soft-narrow--before-overlay)
-    (should-not soft-narrow--after-overlay)))
+(ert-deftest soft-narrow-destroy-overlays-without-overlays () "Test overlay destruction is idempotent when no overlays exist." (soft-narrow-test--with-buffer 10 buf (should-not soft-narrow--before-overlay) (should-not soft-narrow--after-overlay) (soft-narrow--destroy-overlays) (should-not soft-narrow--before-overlay) (should-not soft-narrow--after-overlay)))
 
 
 ;; Boundary Guard Tests
@@ -1875,7 +1860,7 @@ Exercises the correction path where `beginning-of-defun' overshoots."
     (soft-narrow-to-region 100 300)
     (soft-narrow-widen)
     ;; Original read-only property should still be present
-    (should (get-text-property 150 'read-only))))
+    (should (get-char-property 150 'read-only))))
 
 (ert-deftest soft-narrow-preserves-existing-cursor-intangible-property ()
   "Test that existing `cursor-intangible' properties survive narrow/widen cycle."
@@ -1884,7 +1869,7 @@ Exercises the correction path where `beginning-of-defun' overshoots."
     (soft-narrow-to-region 100 300)
     (soft-narrow-widen)
     ;; Original cursor-intangible property should survive
-    (should (get-text-property 250 'cursor-intangible))))
+    (should (get-char-property 250 'cursor-intangible))))
 
 (ert-deftest soft-narrow-preserves-non-t-read-only-value ()
   "Test that non-t `read-only' values (e.g., `'special) survive.
@@ -1897,7 +1882,7 @@ survives the narrow/widen cycle."
     (soft-narrow-to-region 50 300)
     (soft-narrow-widen)
     (should (eq 'other-package
-                (get-text-property 150 'read-only)))))
+                (get-char-property 150 'read-only)))))
 
 (ert-deftest soft-narrow-preserves-visible-region-properties-during-narrow ()
   "Test that existing properties in the visible region survive during active narrow.
@@ -1910,11 +1895,11 @@ stripped properties from the visible [l,r) region during active narrow.
     (soft-narrow-to-region 100 300)
     ;; Property should STILL be present during the narrow
     (should (eq 'important
-                (get-text-property 200 'read-only)))
+                (get-char-property 200 'read-only)))
     (soft-narrow-widen)
     ;; And after widen too
     (should (eq 'important
-                (get-text-property 200 'read-only)))))
+                (get-char-property 200 'read-only)))))
 
 (ert-deftest soft-narrow-ownership-reset-on-external-mode-toggle ()
   "Test that ownership is released when user toggles mode externally.
@@ -1977,63 +1962,76 @@ soft-narrow must not turn it off after the final widen."
     ;; Mode should still be active — soft-narrow didn't own it
     (should (bound-and-true-p cursor-intangible-mode))))
 
-(ert-deftest soft-narrow-stack-preserves-property-snapshot ()
-  "Test that property snapshot is captured only once across multiple narrows.
-After stacking multiple narrows and then fully widening, original properties
-must be restored correctly."
+(ert-deftest soft-narrow-major-mode-change-cleans-buffer-state ()
+  "Test that changing major mode releases markers, hooks, ownership, and overlays."
   (soft-narrow-test--with-buffer 50 buf
-    ;; Set a property before any narrowing
-    (put-text-property 150 200 'read-only t)
-    ;; Stack two narrows
-    (soft-narrow-to-region 100 400)
-    (soft-narrow-to-region 200 350)
-    ;; Pop them all
-    (soft-narrow-widen)
-    (soft-narrow-widen)
-    ;; Original property should be intact
-    (should (get-text-property 150 'read-only))))
+    (soft-narrow-to-region 100 300)
+    (soft-narrow-to-region 150 250)
+    (let ((markers (mapcan (lambda (frame) (list (car frame) (cdr frame)))
+                           soft-narrow--stack)))
+      (text-mode)
+      (should-not soft-narrow--stack)
+      (should-not soft-narrow--cached-intersection)
+      (should-not soft-narrow--before-overlay)
+      (should-not soft-narrow--after-overlay)
+      (should-not soft-narrow--owns-cursor-intangible)
+      (should-not (bound-and-true-p cursor-intangible-mode))
+      (should-not (memq (function soft-narrow--cleanup) change-major-mode-hook))
+      (dolist (marker markers)
+        (should-not (marker-position marker))))))
 
-(ert-deftest soft-narrow-marker-tracks-property-after-insertion ()
-  "Test that markers track property positions after insertion in visible region.
-Oracle-identified gap: absolute positions become stale when text is
-inserted in the visible region during narrow.  Markers with insertion
-type t fix this by tracking the original text."
-  (soft-narrow-test--with-buffer 10 buf
-    (let ((before-end (point-max)))
-      ;; Place a property in the after-region (past the narrow point)
-      (put-text-property (- before-end 40) (- before-end 20)
-                         'read-only 'external)
-      ;; Narrow to a region in the middle
-      (soft-narrow-to-region 30 100)
-      ;; Insert text inside the visible region — shifts everything after
-      (goto-char 60)
-      (insert "XXXXX")
-      ;; Widen — marker-tracked property should be at shifted position
-      (soft-narrow-widen)
-      (should (eq 'external
-                  (get-text-property (- (point-max) 40)
-                                     'read-only))))))
-
-(ert-deftest soft-narrow-marker-insertion-at-exact-position ()
-  "Test that markers survive insertion AT the saved position.
-Oracle-identified gap: `copy-marker' with default nil insertion type
-stays at the insertion point when text is inserted AT the marker.
-With insertion type t, the marker moves with the original text."
-  (let ((buf (generate-new-buffer " *soft-narrow-marker-insert-at*")))
+(ert-deftest soft-narrow-base-buffer-narrowing-is-local ()
+  "Test that narrowing a base buffer leaves its indirect sibling unchanged."
+  (let ((base (generate-new-buffer " *soft-narrow-base*"))
+        sibling)
     (unwind-protect
-        (with-current-buffer buf
-          (insert "abcdef")
-          (put-text-property 3 4 'cursor-intangible 'external)
-          (soft-narrow-to-region 2 6)
-          (goto-char 3)
-          (insert "X")
-          (soft-narrow-widen)
-          ;; Original char 'c' moved to position 4; X inserted at 3.
-          ;; Marker with insertion type t follows the original text.
-          (should (eq 'external (get-text-property 4 'cursor-intangible)))
-          ;; Inserted X at position 3 should NOT have the property
-          (should-not (get-text-property 3 'cursor-intangible)))
-      (kill-buffer buf))))
+        (progn
+          (with-current-buffer base
+            (insert (make-string 1000 ?x))
+            (setq sibling (clone-indirect-buffer " *soft-narrow-sibling*" nil))
+            (soft-narrow-to-region 100 300)
+            (should (get-char-property 50 (quote cursor-intangible))))
+          (with-current-buffer sibling
+            (should-not (soft-narrow-active-p))
+            (should-not (get-char-property 50 (quote cursor-intangible)))))
+      (when (buffer-live-p sibling) (kill-buffer sibling))
+      (when (buffer-live-p base) (kill-buffer base)))))
+
+(ert-deftest soft-narrow-indirect-buffer-narrowing-is-local ()
+  "Test indirect narrowing isolation and synchronization after shared edits."
+  (let ((base (generate-new-buffer " *soft-narrow-indirect-base*"))
+        indirect sibling)
+    (unwind-protect
+        (progn
+          (with-current-buffer base
+            (insert (make-string 1000 ?x))
+            (setq indirect (clone-indirect-buffer " *soft-narrow-indirect-one*" nil))
+            (setq sibling (clone-indirect-buffer " *soft-narrow-indirect-two*" nil)))
+          (with-current-buffer indirect
+            (soft-narrow-to-region 100 300)
+            (should (get-char-property 50 (quote read-only))))
+          (with-current-buffer base
+            (should-not (soft-narrow-active-p))
+            (should-not (get-char-property 50 (quote read-only)))
+            (goto-char (point-min))
+            (insert "XX"))
+          (with-current-buffer sibling
+            (should-not (soft-narrow-active-p))
+            (should-not (get-char-property 50 (quote read-only))))
+          (with-current-buffer indirect
+            (should (equal (soft-narrow-region-bounds) (quote (102 . 302))))
+            (should (= (overlay-end soft-narrow--before-overlay) 102))
+            (should (= (overlay-start soft-narrow--after-overlay) 302))
+            (goto-char 101)
+            (soft-narrow--clamp-point)
+            (should (= (point) 102))
+            (should (equal soft-narrow--cached-intersection (quote (102 . 302))))
+            (let ((this-command (quote backward-char)))
+              (soft-narrow--guard-boundary)
+              (should (eq this-command (function ignore))))))
+      (when (buffer-live-p indirect) (kill-buffer indirect))
+      (when (buffer-live-p sibling) (kill-buffer sibling))
+      (when (buffer-live-p base) (kill-buffer base)))))
 
 (ert-deftest soft-narrow-org-commands-load-dependencies ()
   "Test that org commands work without pre-loading org.
@@ -2152,6 +2150,39 @@ end must NOT be suppressed."
           (should (= (point-min) 3))
           (should (= (point-max) 9)))
       (when (buffer-live-p buf) (kill-buffer buf)))))
+(ert-deftest soft-narrow-to-region-preserves-real-restriction ()
+  "Soft narrowing must operate inside, and preserve, a real restriction."
+  (let ((buf (generate-new-buffer " *soft-narrow-real-restriction*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "0123456789")
+          (narrow-to-region 3 9)
+          (soft-narrow-to-region 4 7)
+          (should (equal (soft-narrow-region-bounds) (cons 4 7)))
+          (should (= (point-min) 3))
+          (should (= (point-max) 9))
+          (should (= (overlay-start soft-narrow--before-overlay) 3))
+          (should (= (overlay-end soft-narrow--before-overlay) 4))
+          (should (= (overlay-start soft-narrow--after-overlay) 7))
+          (should (= (overlay-end soft-narrow--after-overlay) 9))
+          ;; Same-length editing remains possible within the soft bounds.
+          (goto-char 5)
+          (delete-char 1)
+          (insert "X")
+          (should (eq (char-after 5) ?X))
+          (should (equal (soft-narrow-region-bounds) (cons 4 7)))
+          ;; Editing outside the soft bounds is blocked by the guard overlay.
+          (goto-char 3)
+          (should-error (insert "blocked") :type 'text-read-only)
+          (soft-narrow-widen)
+          (should-not (soft-narrow-region-bounds))
+          (should-not (overlayp soft-narrow--before-overlay))
+          (should-not (overlayp soft-narrow--after-overlay))
+          (should (= (point-min) 3))
+          (should (= (point-max) 9)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
 
 ;; Point-Clamp-On-Narrow Test
 ;; Regression: narrowing must leave point inside the visible region even
@@ -2206,22 +2237,19 @@ Falls back to narrowing the whole element rather than erroring."
 ;; a real temporary `narrow-to-region' so such commands can be scoped.
 
 (ert-deftest soft-narrow-region-bounds-accessor ()
-  "Test that `soft-narrow-region-bounds' reports the visible region."
+  "Test that `soft-narrow-region-bounds' reports active zero-width bounds."
   (soft-narrow-test--with-buffer 100 buf
-    ;; nil when inactive
     (should-not (soft-narrow-region-bounds))
     (soft-narrow-to-region 200 400)
-    (should (equal (soft-narrow-region-bounds) '(200 . 400)))
-    ;; reflects intersection of stacked narrows
+    (should (equal (soft-narrow-region-bounds) (quote (200 . 400))))
     (soft-narrow-to-region 250 350)
-    (should (equal (soft-narrow-region-bounds) '(250 . 350)))
-    ;; nil for empty (non-overlapping) intersection
+    (should (equal (soft-narrow-region-bounds) (quote (250 . 350))))
     (soft-narrow-to-region 600 700)
-    (should-not (soft-narrow-region-bounds))))
+    (should (equal (soft-narrow-region-bounds) (quote (600 . 600))))))
 
 (ert-deftest soft-narrow-with-restriction-scopes-buffer-scan ()
-  "Test that `soft-narrow-with-restriction' scopes buffer-wide commands.
-`mark-whole-buffer' and `count-words' see only the soft-narrow region."
+  "Test that soft-narrow-with-restriction scopes buffer-wide commands.
+mark-whole-buffer and count-words see only the soft-narrow region."
   (soft-narrow-test--with-buffer 100 buf
     (soft-narrow-to-region 200 400)
     ;; count-words on point-min..point-max sees only the region
@@ -2230,7 +2258,8 @@ Falls back to narrowing the whole element rather than erroring."
                    (count-words (point-min) (point-max)))))
       (should (< scoped full)))
     ;; mark-whole-buffer scopes to the region
-    (soft-narrow-with-restriction (mark-whole-buffer))
+    (soft-narrow-with-restriction
+      (call-interactively (function mark-whole-buffer)))
     (should (= (region-beginning) 200))
     (should (= (region-end) 400))))
 
@@ -2300,6 +2329,307 @@ buffer.  `soft-narrow-with-restriction' scopes export to the subtree."
               (should-not (string-match-p "Heading C" scoped))))
         (when (buffer-live-p buf) (kill-buffer buf))))))
 
-(provide 'soft-narrow-test)
+(ert-deftest soft-narrow-rejects-insertion-at-absolute-buffer-edges ()
+  "Reject repeated insertion holes without installing a persistent guard."
+  (with-temp-buffer
+    (insert "abcdef")
+    (soft-narrow-to-region 3 5)
+    (dotimes (_ 2)
+      (goto-char (point-min))
+      (should-error (insert "L") :type (quote text-read-only))
+      (should-not before-change-functions)
+      (goto-char (point-max))
+      (should-error (insert "R") :type (quote text-read-only))
+      (should-not before-change-functions))
+    (should (equal (buffer-string) "abcdef"))))
+
+  (ert-deftest soft-narrow-zero-and-disjoint-reject-absolute-edge-insertions ()
+    "Reject absolute-edge insertions for zero-width and disjoint intersections."
+    (dolist (setup (list (lambda () (soft-narrow-to-region 3 3))
+                         (lambda ()
+                           (soft-narrow-to-region 2 3)
+                           (soft-narrow-to-region 5 6))))
+      (with-temp-buffer
+        (insert "abcdef")
+        (funcall setup)
+        (should (= (car (soft-narrow-region-bounds))
+                   (cdr (soft-narrow-region-bounds))))
+        (goto-char (point-min))
+        (should-error (insert "L") :type (quote text-read-only))
+        (goto-char (point-max))
+        (should-error (insert "R") :type (quote text-read-only))
+        (should (equal (buffer-string) "abcdef")))))
+
+  (ert-deftest soft-narrow-visible-end-insertion-resynchronizes-overlays ()
+    "Keep bounds and overlays synchronized after insertion at visible END."
+    (with-temp-buffer
+      (insert "abcdef")
+      (soft-narrow-to-region 3 5)
+      (goto-char 5)
+      (insert "X")
+      (should (equal (soft-narrow-region-bounds) (quote (3 . 6))))
+      (should (equal soft-narrow--cached-intersection (quote (3 . 6))))
+      (should (= (overlay-start soft-narrow--after-overlay) 6))
+      (should (= (overlay-end soft-narrow--after-overlay) (point-max)))
+      (should-not (get-char-property 5 (quote read-only)))
+      (should (get-char-property 6 (quote read-only)))))
+
+  (ert-deftest soft-narrow-full-buffer-insertion-keeps-overlays-dormant ()
+    "Keep both persistent overlays empty after editing a full-buffer region."
+    (with-temp-buffer
+      (insert "abcdef")
+      (soft-narrow-to-region (point-min) (point-max))
+      (goto-char 4)
+      (insert "X")
+      (should (equal (soft-narrow-region-bounds)
+                     (cons (point-min) (point-max))))
+      (dolist (overlay (list soft-narrow--before-overlay
+                             soft-narrow--after-overlay))
+        (should (= (overlay-start overlay) (point-min)))
+        (should (= (overlay-end overlay) (point-min))))
+      (should-not (get-char-property 4 (quote read-only)))))
+
+  (ert-deftest soft-narrow-global-disable-continues-after-cleanup-error ()
+    "Clean every active buffer before re-signaling the first cleanup error."
+    (let ((buf1 (generate-new-buffer " *soft-narrow-cleanup-error-1*"))
+          (buf2 (generate-new-buffer " *soft-narrow-cleanup-error-2*"))
+          (calls nil)
+          (original (symbol-function (quote soft-narrow--cleanup))))
+      (unwind-protect
+          (progn
+            (dolist (buf (list buf1 buf2))
+              (with-current-buffer buf
+                (insert "abcdef")
+                (soft-narrow-to-region 2 5)))
+            (cl-letf (((symbol-function (quote soft-narrow--cleanup))
+                       (lambda ()
+                         (push (current-buffer) calls)
+                         (funcall original)
+                         (when (eq (current-buffer) buf1)
+                           (error "injected cleanup failure")))))
+              (should-error (soft-narrow-mode -1)
+                            :type (quote error)))
+            (dolist (buf (list buf1 buf2))
+              (should (memq buf calls))
+              (with-current-buffer buf
+                (should-not soft-narrow--stack)
+                (should-not soft-narrow--before-overlay)
+                (should-not soft-narrow--after-overlay))))
+        (when (buffer-live-p buf1) (kill-buffer buf1))
+        (when (buffer-live-p buf2) (kill-buffer buf2)))))
+
+  (ert-deftest soft-narrow-full-buffer-allows-point-min-insertion ()
+    "Allow insertion at point-min when both blocking overlays are dormant."
+    (with-temp-buffer
+      (insert "abcdef")
+      (soft-narrow-to-region (point-min) (point-max))
+      (goto-char (point-min))
+      (insert "X")
+      (should (equal (buffer-string) "Xabcdef"))
+      (should (equal (soft-narrow-region-bounds)
+                     (cons (point-min) (point-max))))
+      (should (equal soft-narrow--cached-intersection
+                     (cons (point-min) (point-max))))
+      (dolist (overlay (list soft-narrow--before-overlay
+                             soft-narrow--after-overlay))
+        (should (= (overlay-start overlay) (point-min)))
+        (should (= (overlay-end overlay) (point-min))))
+      (should-not (overlay-get soft-narrow--before-overlay
+                               (quote insert-in-front-hooks)))
+      (should-not (overlay-get soft-narrow--after-overlay
+                               (quote insert-behind-hooks)))))
+
+  (ert-deftest soft-narrow-prefix-visible-allows-point-min-insertion ()
+    "Allow point-min insertion when only the trailing range is blocked."
+    (with-temp-buffer
+      (insert "abcdef")
+      (soft-narrow-to-region (point-min) 5)
+      (goto-char (point-min))
+      (insert "X")
+      (should (equal (buffer-string) "Xabcdef"))
+      (should (equal (soft-narrow-region-bounds) (quote (1 . 6))))
+      (should (equal soft-narrow--cached-intersection (quote (1 . 6))))
+      (should (= (overlay-start soft-narrow--before-overlay) (point-min)))
+      (should (= (overlay-end soft-narrow--before-overlay) (point-min)))
+      (should (= (overlay-start soft-narrow--after-overlay) 6))
+      (should (= (overlay-end soft-narrow--after-overlay) (point-max)))
+      (should-not (overlay-get soft-narrow--before-overlay
+                               (quote insert-in-front-hooks)))
+      (should (overlay-get soft-narrow--after-overlay
+                           (quote insert-behind-hooks)))))
+
+  (ert-deftest soft-narrow-suffix-visible-allows-point-max-insertion ()
+    "Allow point-max insertion when only the leading range is blocked."
+    (with-temp-buffer
+      (insert "abcdef")
+      (soft-narrow-to-region 3 (point-max))
+      (goto-char (point-max))
+      (insert "X")
+      (should (equal (buffer-string) "abcdefX"))
+      (should (equal (soft-narrow-region-bounds) (quote (3 . 8))))
+      (should (equal soft-narrow--cached-intersection (quote (3 . 8))))
+      (should (= (overlay-start soft-narrow--before-overlay) (point-min)))
+      (should (= (overlay-end soft-narrow--before-overlay) 3))
+      (should (= (overlay-start soft-narrow--after-overlay) (point-min)))
+      (should (= (overlay-end soft-narrow--after-overlay) (point-min)))
+      (should (overlay-get soft-narrow--before-overlay
+                           (quote insert-in-front-hooks)))
+      (should-not (overlay-get soft-narrow--after-overlay
+                               (quote insert-behind-hooks)))))
+
+(ert-deftest soft-narrow-initial-failure-rolls-back-state ()
+  "Release the first frame and all partial state when setup signals."
+  (soft-narrow-test--with-buffer 20 buf
+				 (require (quote cursor-sensor))
+				 (let ((hook-calls 0)
+				       failed-frame)
+				   (let ((cursor-intangible-mode-hook
+       (list (lambda ()
+               (setq hook-calls (1+ hook-calls))
+               (unless failed-frame
+                 (setq failed-frame (car soft-narrow--stack)))
+               (error (if (= hook-calls 1)
+                          "initial apply failure"
+                        "rollback failure"))))))
+  (let ((failure (should-error (soft-narrow-to-region 20 80)
+                               :type (quote error))))
+    (should (equal (error-message-string failure)
+                   "initial apply failure")))
+  (should (= hook-calls 2))
+  (should failed-frame)
+  (should-not (marker-buffer (car failed-frame)))
+  (should-not (marker-buffer (cdr failed-frame)))))
+				 (should-not soft-narrow--stack)
+				 (should-not soft-narrow--cached-intersection)
+				 (should-not soft-narrow--before-overlay)
+				 (should-not soft-narrow--after-overlay)
+				 (should-not soft-narrow--owns-cursor-intangible)
+				 (should-not (bound-and-true-p cursor-intangible-mode))
+				 (should-not (memq (function soft-narrow--on-cursor-intangible-mode-change)
+						   cursor-intangible-mode-hook))
+				 (should-not (memq (function soft-narrow--guard-boundary)
+						   pre-command-hook))
+				 (should-not (memq (function soft-narrow--clamp-point)
+						   post-command-hook))
+				 (should-not (memq (function soft-narrow--refresh-intersection)
+						   after-change-functions))
+				 (should-not (memq (function soft-narrow--cleanup)
+						   change-major-mode-hook))))
+
+(ert-deftest soft-narrow-stacked-failure-preserves-previous-state ()
+  "Restore an existing narrowing when a stacked apply signals."
+  (soft-narrow-test--with-buffer 20 buf
+				 (soft-narrow-to-region 20 80)
+				 (let ((previous-stack soft-narrow--stack)
+				       (previous-intersection soft-narrow--cached-intersection)
+				       (before-start (overlay-start soft-narrow--before-overlay))
+				       (before-end (overlay-end soft-narrow--before-overlay))
+				       (after-start (overlay-start soft-narrow--after-overlay))
+				       (after-end (overlay-end soft-narrow--after-overlay))
+				       (apply-calls 0)
+				       failed-frame)
+				   (cl-letf (((symbol-function (quote soft-narrow--apply-properties))
+					      (lambda ()
+						(setq apply-calls (1+ apply-calls))
+						(unless failed-frame
+						  (setq failed-frame (car soft-narrow--stack)))
+						(error (if (= apply-calls 1)
+							   "stacked apply failure"
+							 "stacked rollback failure")))))
+				     (let ((failure (should-error (soft-narrow-to-region 30 70)
+								  :type (quote error))))
+				       (should (equal (error-message-string failure)
+						      "stacked apply failure"))))
+				   (should (= apply-calls 2))
+				   (should (eq soft-narrow--stack previous-stack))
+				   (should (eq soft-narrow--cached-intersection previous-intersection))
+				   (should failed-frame)
+				   (should-not (marker-buffer (car failed-frame)))
+				   (should-not (marker-buffer (cdr failed-frame)))
+				   (should (= (overlay-start soft-narrow--before-overlay) before-start))
+				   (should (= (overlay-end soft-narrow--before-overlay) before-end))
+				   (should (= (overlay-start soft-narrow--after-overlay) after-start))
+				   (should (= (overlay-end soft-narrow--after-overlay) after-end))
+				   (should soft-narrow--owns-cursor-intangible)
+				   (should (bound-and-true-p cursor-intangible-mode))
+				   (should (memq (function soft-narrow--guard-boundary)
+						 pre-command-hook))
+				   (should (memq (function soft-narrow--clamp-point)
+						 post-command-hook))
+				   (should (memq (function soft-narrow--refresh-intersection)
+						 after-change-functions)))))
+
+(progn
+  (ert-deftest soft-narrow-partial-stacked-failure-restores-mode-state ()
+    "Restore cursor mode ownership after a partially applied stack frame."
+    (soft-narrow-test--with-buffer 20 buf
+      (require (quote cursor-sensor))
+      (soft-narrow-to-region 20 80)
+      (cursor-intangible-mode -1)
+      (should-not (bound-and-true-p cursor-intangible-mode))
+      (should-not soft-narrow--owns-cursor-intangible)
+      (let ((hook-calls 0)
+            failed-frame)
+        (add-hook
+         (quote cursor-intangible-mode-hook)
+         (lambda ()
+           (setq hook-calls (1+ hook-calls))
+           (unless failed-frame
+             (setq failed-frame (car soft-narrow--stack)))
+           (when (= hook-calls 1)
+             (error "partial stacked apply failure")))
+         nil t)
+        (let ((previous-stack soft-narrow--stack)
+              (previous-intersection soft-narrow--cached-intersection)
+              (previous-before-overlay soft-narrow--before-overlay)
+              (previous-after-overlay soft-narrow--after-overlay)
+              (before-start (overlay-start soft-narrow--before-overlay))
+              (before-end (overlay-end soft-narrow--before-overlay))
+              (after-start (overlay-start soft-narrow--after-overlay))
+              (after-end (overlay-end soft-narrow--after-overlay))
+              (previous-cursor-hook (copy-tree cursor-intangible-mode-hook))
+              (previous-pre-hook (copy-tree pre-command-hook))
+              (previous-post-hook (copy-tree post-command-hook))
+              (previous-change-hook (copy-tree after-change-functions))
+              (previous-major-mode-hook (copy-tree change-major-mode-hook)))
+          (let ((failure
+                 (should-error (soft-narrow-to-region 30 70)
+                               :type (quote error))))
+            (should (equal (error-message-string failure)
+                           "partial stacked apply failure")))
+          (should (= hook-calls 1))
+          (should (eq soft-narrow--stack previous-stack))
+          (should (equal soft-narrow--cached-intersection
+                         previous-intersection))
+          (should (eq soft-narrow--before-overlay previous-before-overlay))
+          (should (eq soft-narrow--after-overlay previous-after-overlay))
+          (should (= (overlay-start soft-narrow--before-overlay) before-start))
+          (should (= (overlay-end soft-narrow--before-overlay) before-end))
+          (should (= (overlay-start soft-narrow--after-overlay) after-start))
+          (should (= (overlay-end soft-narrow--after-overlay) after-end))
+          (should (equal cursor-intangible-mode-hook previous-cursor-hook))
+          (should (equal pre-command-hook previous-pre-hook))
+          (should (equal post-command-hook previous-post-hook))
+          (should (equal after-change-functions previous-change-hook))
+          (should (equal change-major-mode-hook previous-major-mode-hook))
+          (should failed-frame)
+          (should-not (marker-buffer (car failed-frame)))
+          (should-not (marker-buffer (cdr failed-frame)))
+          (should-not (bound-and-true-p cursor-intangible-mode))
+          (should-not soft-narrow--owns-cursor-intangible)))))
+  (ert-deftest soft-narrow-invalid-bounds-do-not-enable-mode ()
+      "Reject invalid bounds without mutating narrowing state."
+      (when soft-narrow-mode
+        (soft-narrow-mode -1))
+      (with-temp-buffer
+        (let ((failure
+               (should-error (soft-narrow-to-region nil 2)
+                             :type (quote wrong-type-argument))))
+          (should (eq (car failure) (quote wrong-type-argument))))
+        (should-not soft-narrow-mode)
+        (should-not soft-narrow--stack)
+        (should-not soft-narrow--before-overlay)
+        (should-not soft-narrow--after-overlay)))
+    (provide (quote soft-narrow-test)))
 
 ;;; soft-narrow-test.el ends here
