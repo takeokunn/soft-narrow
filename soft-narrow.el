@@ -5,7 +5,7 @@
 ;; Author: takeokunn <bararararatty@gmail.com>
 ;; Maintainer: takeokunn <bararararatty@gmail.com>
 ;; URL: https://github.com/takeokunn/soft-narrow
-;; Version: 1.2.0
+;; Version: 1.2.1
 ;; Keywords: faces convenience
 ;; Package-Requires: ((emacs "29.1"))
 
@@ -87,7 +87,11 @@
 
 ;; Forward declaration to suppress byte-compiler warnings.
 ;; The actual value is set by org-element.el.
-(progn (with-no-warnings (defvar org-element-greater-elements)) (defvar cursor-intangible-mode) (defvar cursor-intangible-mode-hook))
+(progn
+  (with-no-warnings
+    (defvar org-element-greater-elements))
+  (defvar cursor-intangible-mode)
+  (defvar cursor-intangible-mode-hook nil))
 
 ;; Org-mode macro (needed at compile time for macro expansion)
 (eval-when-compile
@@ -339,17 +343,41 @@ Added to `post-command-hook` as a buffer-local hook."
      ((< (point) l) (goto-char l))
      ((>= (point) r) (goto-char (max l (1- r)))))))
 
-(defun soft-narrow--refresh-intersection (&rest _)
+(defun soft-narrow--refresh-intersection (beg end old-length)
   "Refresh the cached intersection and blocking overlays after an edit.
-Stack markers track edits inside the visible region.  Reposition both
-persistent overlays to the resulting bounds while modification hooks are
-inhibited, so overlay maintenance cannot recursively reject the edit."
-  (when-let* ((intersection (soft-narrow--compute-intersection)))
-    (setq soft-narrow--cached-intersection intersection
-          soft-narrow--cached-modification-tick
-          (buffer-chars-modified-tick))
-    (let ((inhibit-modification-hooks t))
-      (soft-narrow--show-overlays (car intersection) (cdr intersection)))))
+BEG and END delimit the changed text after the edit; OLD-LENGTH is its length
+before the edit.  Use marker-tracked geometry for edits strictly inside the
+cached intersection, and recompute at boundaries or when the cache is stale."
+  (let* ((cached soft-narrow--cached-intersection)
+         (l (car-safe cached))
+         (r (cdr-safe cached))
+         (delta (- (- end beg) old-length))
+         (new-r (and r (+ r delta)))
+         (fast-path
+          (and cached
+               (overlayp soft-narrow--before-overlay)
+               (overlayp soft-narrow--after-overlay)
+               (> beg l)
+               (< (+ beg old-length) r)
+               (if (= l (point-min))
+                   (= (overlay-start soft-narrow--before-overlay)
+                      (overlay-end soft-narrow--before-overlay))
+                 (= (overlay-end soft-narrow--before-overlay) l))
+               (if (= new-r (point-max))
+                   (= (overlay-start soft-narrow--after-overlay)
+                      (overlay-end soft-narrow--after-overlay))
+                 (= (overlay-start soft-narrow--after-overlay) new-r)))))
+    (if fast-path
+        (setq soft-narrow--cached-intersection (cons l new-r)
+              soft-narrow--cached-modification-tick
+              (buffer-chars-modified-tick))
+      (when-let* ((intersection (soft-narrow--compute-intersection)))
+        (setq soft-narrow--cached-intersection intersection
+              soft-narrow--cached-modification-tick
+              (buffer-chars-modified-tick))
+        (let ((inhibit-modification-hooks t))
+          (soft-narrow--show-overlays
+           (car intersection) (cdr intersection)))))))
 
 ;;;###autoload
 (defun soft-narrow-to-region (start end)

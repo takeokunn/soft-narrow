@@ -16,7 +16,7 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 - *Stackable narrowing* — true intersection semantics for progressive focusing
 - *Region-scoped commands* — run buffer-scanning commands (org export, =mark-whole-buffer=, …) scoped to the visible region via =soft-narrow-execute= / =soft-narrow-with-restriction=
 - *Pure declarative approach* — uses two buffer-local overlays carrying =face=, =cursor-intangible=, and =read-only= without modifying buffer text properties
-- *Lightweight* — single-file implementation (~400 lines including org-mode integrations)
+- *Self-contained* — single-file implementation with built-in org-mode integrations
 
 * Prerequisites
 
@@ -179,6 +179,39 @@ Emacs handles visual deemphasis and cursor restriction natively.  While narrowin
 - Markers automatically track insertions/deletions
 - Use =soft-narrow-widen= to reset if state becomes corrupted
 
+* Benchmark
+
+=make benchmark= compares soft-narrow directly with fancy-narrow at the pinned
+commit =c9b3363752c09045b8ce7a2635afae42d2ae63c7=.  The first invocation fetches
+that commit into =~/.cache/soft-narrow= (override with =BENCHMARK_CACHE=); this
+explicit target is the only network-dependent part and is not run by the normal
+test or CI targets.
+
+#+begin_src shell
+make benchmark
+
+# A smaller exploratory run, or custom repeat counts:
+BENCHMARK_BUFFER_BYTES=1048576 \
+BENCHMARK_WARMUPS=2 \
+BENCHMARK_SAMPLES=10 \
+BENCHMARK_EDIT_ITERATIONS=1000 \
+make benchmark
+#+end_src
+
+The default run uses a 10 MiB =fundamental-mode= buffer in non-displayed batch
+Emacs.  For each implementation it discards three warmups and reports the
+minimum, median, mean, and nearest-rank p95 of 15 samples.  It measures initial
+setup, an insert/delete pair at the center of the active region (2,000 pairs per
+sample), and widen separately.  Buffer creation and narrowing needed to prepare
+the edit and widen cases are outside their timed intervals; garbage collection
+runs immediately before each timed interval.
+
+Times are microseconds per operation.  The =soft/fancy median ratio= is below
+1 when soft-narrow is faster for that scenario.  These results characterize
+only the printed Emacs build, machine, buffer mode and workload; they are not a
+universal performance or "fastest" claim.  Run the benchmark on representative
+major modes and files before drawing conclusions for a particular workflow.
+
 * Development
 
 #+begin_src shell
@@ -186,6 +219,7 @@ make compile       # Byte-compile soft-narrow.el
 make test          # Run ERT tests
 make lint          # Run checkdoc
 make package-lint  # Run package-lint
+make benchmark     # Compare with pinned fancy-narrow (network on first run)
 nix flake check    # Run all checks via Nix
 #+end_src
 

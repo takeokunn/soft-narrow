@@ -2559,6 +2559,18 @@ buffer.  `soft-narrow-with-restriction' scopes export to the subtree."
 				   (should (memq (function soft-narrow--refresh-intersection)
 						 after-change-functions)))))
 
+(ert-deftest soft-narrow-pristine-load-initializes-cursor-hook ()
+  "Call the public API without preloading cursor-sensor in a pristine Emacs."
+  (let* ((library (locate-library "soft-narrow"))
+         (root (file-name-directory library))
+         (program (expand-file-name invocation-name invocation-directory))
+         (status (call-process
+                  program nil nil nil
+                  "-Q" "--batch" "-L" root
+                  "--eval"
+                  "(progn (require 'soft-narrow) (with-temp-buffer (insert \"abc\") (soft-narrow-to-region 1 2) (unless (equal (soft-narrow-region-bounds) '(1 . 2)) (kill-emacs 2))))")))
+    (should (equal status 0))))
+
 (progn
   (ert-deftest soft-narrow-partial-stacked-failure-restores-mode-state ()
     "Restore cursor mode ownership after a partially applied stack frame."
@@ -2630,6 +2642,39 @@ buffer.  `soft-narrow-with-restriction' scopes export to the subtree."
         (should-not soft-narrow--stack)
         (should-not soft-narrow--before-overlay)
         (should-not soft-narrow--after-overlay)))
-    (provide (quote soft-narrow-test)))
+    (progn
+  (ert-deftest soft-narrow-interior-edits-skip-overlay-recomputation ()
+    "Avoid recomputing marker-tracked geometry for strict interior edits."
+    (with-temp-buffer
+      (insert "abcdef")
+      (soft-narrow-to-region 3 5)
+      (let ((compute-calls 0)
+            (show-calls 0)
+            (compute (symbol-function (quote soft-narrow--compute-intersection)))
+            (show (symbol-function (quote soft-narrow--show-overlays))))
+        (cl-letf (((symbol-function (quote soft-narrow--compute-intersection))
+                   (lambda ()
+                     (setq compute-calls (1+ compute-calls))
+                     (funcall compute)))
+                  ((symbol-function (quote soft-narrow--show-overlays))
+                   (lambda (&rest args)
+                     (setq show-calls (1+ show-calls))
+                     (apply show args))))
+          (goto-char 4)
+          (insert "XY")
+          (delete-char -1)
+          (should (= compute-calls 0))
+          (should (= show-calls 0))
+          (should (equal soft-narrow--cached-intersection (quote (3 . 6))))
+          (should (= soft-narrow--cached-modification-tick
+                     (buffer-chars-modified-tick)))
+          (should (= (overlay-end soft-narrow--before-overlay) 3))
+          (should (= (overlay-start soft-narrow--after-overlay) 6))
+          (goto-char 6)
+          (insert "Z")
+          (should (= compute-calls 1))
+          (should (= show-calls 1))
+          (should (equal soft-narrow--cached-intersection (quote (3 . 7))))))))
+  (provide (quote soft-narrow-test))))
 
 ;;; soft-narrow-test.el ends here
