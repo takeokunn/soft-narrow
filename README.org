@@ -15,7 +15,7 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 - *Minimal overhead* — no function advising; buffer-local =pre-command-hook= and =post-command-hook= for boundary handling, installed only while narrowing is active
 - *Stackable narrowing* — true intersection semantics for progressive focusing
 - *Region-scoped commands* — run buffer-scanning commands (org export, =mark-whole-buffer=, …) scoped to the visible region via =soft-narrow-execute= / =soft-narrow-with-restriction=
-- *Pure declarative approach* — uses overlays for visual deemphasis, =cursor-intangible= and =read-only= text properties for behavior
+- *Pure declarative approach* — uses two buffer-local overlays carrying =face=, =cursor-intangible=, and =read-only= without modifying buffer text properties
 - *Lightweight* — single-file implementation (~400 lines including org-mode integrations)
 
 * Prerequisites
@@ -24,20 +24,27 @@ This package was inspired by [[https://github.com/Malabarba/fancy-narrow][fancy-
 
 * Installation
 
-** use-package (once available on MELPA)
+soft-narrow is not currently available from MELPA.  Install it directly from
+the Git repository; the following =leaf= configuration is the recommended
+method.
 
-#+begin_src emacs-lisp
-(use-package soft-narrow
-  :ensure t
-  :config (soft-narrow-mode 1))
-#+end_src
-
-** leaf
+** Git URL with leaf (recommended)
 
 #+begin_src emacs-lisp
 (leaf soft-narrow
   :vc (:url "https://github.com/takeokunn/soft-narrow")
   :global-minor-mode t)
+#+end_src
+
+** Local checkout with use-package
+
+Clone this repository, add it to your =load-path=, and configure it with
+=use-package=:
+
+#+begin_src emacs-lisp
+(use-package soft-narrow
+  :load-path "/path/to/soft-narrow"
+  :config (soft-narrow-mode 1))
 #+end_src
 
 ** Manual
@@ -102,7 +109,7 @@ soft-narrow supports stackable narrowing with *true intersection* semantics:
 #+begin_src emacs-lisp
 (soft-narrow-to-region 100 200)  ; Lines 100-200
 (soft-narrow-to-region 300 400)  ; Lines 300-400 (no overlap)
-;; Result: intersection is empty, all narrowing properties are cleared.
+;; Result: intersection is empty, so the entire buffer is blocked.
 ;; Use soft-narrow-widen to pop back and restore the previous region.
 #+end_src
 
@@ -150,13 +157,13 @@ Note: this is designed for user interaction. For use within Lisp code, the stand
 ** How It Works
 
 soft-narrow uses Emacs 29.1+ native features:
-- *Overlays with =face= property*: Visually deemphasizes text outside the narrowed region (greyed out)
-- *=cursor-intangible=*: Native cursor motion restriction via text properties
-- *=read-only= text property*: Prevents editing outside region
-- *Stickiness properties*: =front-sticky= / =rear-nonsticky= on =cursor-intangible= applied to the before-region only, preventing boundary flickering (workaround for Emacs Bug#51095). The after-region intentionally omits =front-sticky= so the cursor can rest at the exact end boundary of the narrowed region.
+- *Two buffer-local overlays*: The before-region and after-region overlays carry =face=, =cursor-intangible=, and =read-only=, providing visual deemphasis, cursor restriction, and edit protection without snapshotting, removing, or restoring text properties owned by other packages.
+- *Insertion protection*: Overlay modification hooks reject insertions in blocked regions while still respecting =inhibit-read-only=.
+- *Zero-width intersections*: Disjoint or touching stacked regions produce an explicit zero-width intersection and block the entire buffer until that stack frame is popped.
+- *Buffer independence*: Overlay and marker state is local to each base or indirect buffer, so narrowing one buffer does not alter its siblings.
 - *Stackable state*: True intersection of multiple narrowed regions via marker-based LIFO stack
 
-Emacs handles visual deemphasis and cursor restriction natively.  While narrowing is active, three buffer-local hooks are installed: =soft-narrow--guard-boundary= (=pre-command-hook=) suppresses movement commands that would cross a narrowed-region boundary, eliminating two-phase visual flicker; =soft-narrow--clamp-point= (=post-command-hook=, depth 10) clamps point if a command somehow lands the cursor inside a blocked overlay region; =soft-narrow--refresh-intersection= (=after-change-functions=) recomputes the cached region bounds after edits inside the visible region, whose stack markers shift and would otherwise leave the cached bounds stale.  All three hooks are removed on the final widen.
+Emacs handles visual deemphasis and cursor restriction natively.  While narrowing is active, buffer-local hooks suppress movement across the boundary, clamp point back into the active region, refresh marker-derived bounds after edits, and clean up state before a major-mode change.  The final widen removes every hook and overlay and releases all stack markers, even if cursor-mode cleanup signals an error.
 
 ** Troubleshooting
 

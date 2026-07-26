@@ -5,7 +5,7 @@
 ;; Author: takeokunn <bararararatty@gmail.com>
 ;; Maintainer: takeokunn <bararararatty@gmail.com>
 ;; URL: https://github.com/takeokunn/soft-narrow
-;; Version: 1.1.0
+;; Version: 1.2.0
 ;; Keywords: faces convenience
 ;; Package-Requires: ((emacs "29.1"))
 
@@ -53,7 +53,7 @@
 ;; If you activate `soft-narrow-mode', the standard narrowing keys
 ;; (C-x n n, C-x n w, etc.) will use soft-narrow equivalents.
 ;;
-;; Version 1.0.0 requires Emacs 29.1+ and uses modern APIs:
+;; This package requires Emacs 29.1+ and uses modern APIs:
 ;; - cursor-intangible property for minimal per-keystroke overhead
 ;; - Stackable narrowing with true intersection semantics
 ;; - No function advising; buffer-local pre/post-command-hooks for boundary enforcement
@@ -87,8 +87,7 @@
 
 ;; Forward declaration to suppress byte-compiler warnings.
 ;; The actual value is set by org-element.el.
-(with-no-warnings
-  (defvar org-element-greater-elements))
+(progn (with-no-warnings (defvar org-element-greater-elements)) (defvar cursor-intangible-mode) (defvar cursor-intangible-mode-hook))
 
 ;; Org-mode macro (needed at compile time for macro expansion)
 (eval-when-compile
@@ -122,19 +121,12 @@ Each frame is a cons (START-MARKER . END-MARKER).")
   "Persistent overlay covering blocked text after the narrowed region.")
 
 (defvar-local soft-narrow--cached-intersection nil
-  "Cached result of `soft-narrow--compute-intersection'.
-A cons (START . END) when valid, nil otherwise.
-Recomputed by `soft-narrow--apply-properties' on narrow/widen and by
-`soft-narrow--refresh-intersection' from `after-change-functions' after
-edits inside the visible region (markers shift, so the cached integer
-bounds must be refreshed to keep `soft-narrow--guard-boundary' and
-`soft-narrow--clamp-point' accurate).")
+  "Cached result of `soft-narrow--compute-intersection`.
+A cons (START . END) while active, including zero-width intersections,
+and nil otherwise.  Refreshed after edits because stack markers move.")
 
-(defvar-local soft-narrow--property-snapshot nil
-  "Saved original text property state for restoration on final widen.
-Captured once on the first `soft-narrow-to-region' call, restored when
-all narrowing levels are popped.  Nil or `empty' when no properties
-were set at capture time.")
+(defvar-local soft-narrow--cached-modification-tick nil
+  "Value of `buffer-chars-modified-tick` for the cached intersection.")
 
 (defvar-local soft-narrow--owns-cursor-intangible nil
   "Non-nil if soft-narrow enabled `cursor-intangible-mode' in this buffer.
@@ -166,55 +158,65 @@ disabled on final widen."
 ;;;###autoload
 (defun soft-narrow-region-bounds ()
   "Return the visible soft-narrow region as a cons (START . END).
-Return nil when the buffer is not soft-narrowed or when the narrowing
-stack has an empty (non-overlapping) intersection.  Intended for use
-with `soft-narrow-with-restriction' to scope buffer-wide operations to
-the soft-narrowed region."
-  (soft-narrow--compute-intersection))
+Return nil only when the buffer is not soft-narrowed.  Empty and disjoint
+intersections are represented by equal START and END positions."
+  (soft-narrow--sync-intersection))
 
 (defun soft-narrow--compute-intersection ()
-  "Compute intersection of all frames in the narrowing stack.
-Return (START . END) for valid intersection, or nil if no valid intersection."
+  "Compute the normalized intersection of all narrowing frames.
+Return nil for an empty stack.  Empty or disjoint intersections are
+represented as a zero-width cons so an active stack always has bounds."
   (when soft-narrow--stack
-    (let ((first (car soft-narrow--stack)))
-      (named-let loop ((frames (cdr soft-narrow--stack))
-                       (max-start (marker-position (car first)))
-                       (min-end (marker-position (cdr first))))
-        (if (null frames)
-            (cons max-start min-end)
-          (let ((new-start (max max-start (marker-position (car (car frames)))))
-                (new-end (min min-end (marker-position (cdr (car frames))))))
-            (if (>= new-start new-end)
-                nil
-              (loop (cdr frames) new-start new-end))))))))
+    (let ((max-start (point-min))
+          (min-end (point-max)))
+      (dolist (frame soft-narrow--stack)
+        (setq max-start (max max-start (marker-position (car frame)))
+              min-end (min min-end (marker-position (cdr frame)))))
+      (cons max-start (max max-start min-end)))))
 
 (defun soft-narrow--ensure-overlays ()
-  "Ensure persistent overlays exist for this buffer, creating them if needed."
+  "Ensure the two buffer-owned blocking overlays exist."
   (unless (overlayp soft-narrow--before-overlay)
     (setq soft-narrow--before-overlay (make-overlay 1 1))
-    (overlay-put soft-narrow--before-overlay 'face 'soft-narrow-blocked-face)
-    (overlay-put soft-narrow--before-overlay 'soft-narrow t))
+    (overlay-put soft-narrow--before-overlay (quote soft-narrow) t))
   (unless (overlayp soft-narrow--after-overlay)
-    (setq soft-narrow--after-overlay (make-overlay 1 1 nil nil t))
-    (overlay-put soft-narrow--after-overlay 'face 'soft-narrow-blocked-face)
-    (overlay-put soft-narrow--after-overlay 'soft-narrow t)))
+    (setq soft-narrow--after-overlay (make-overlay 1 1))
+    (overlay-put soft-narrow--after-overlay (quote soft-narrow) t))
+  (dolist (overlay (list soft-narrow--before-overlay
+                         soft-narrow--after-overlay))
+    (overlay-put overlay (quote face) (quote soft-narrow-blocked-face))
+    (overlay-put overlay (quote read-only) t)
+    (overlay-put overlay (quote cursor-intangible) t)
+    (overlay-put overlay (quote modification-hooks)
+                 (list (function soft-narrow--prevent-modification)))))
 
 (defun soft-narrow--show-overlays (start end)
-  "Position persistent overlays to cover blocked regions outside START..END."
+  "Position persistent overlays to block text outside START..END."
   (soft-narrow--ensure-overlays)
-  (if (> start (point-min))
-      (move-overlay soft-narrow--before-overlay (point-min) start)
-    (move-overlay soft-narrow--before-overlay 1 1))
-  (if (< end (point-max))
-      (move-overlay soft-narrow--after-overlay end (point-max))
-    (move-overlay soft-narrow--after-overlay 1 1)))
+  (if (= start end)
+      (progn
+        (move-overlay soft-narrow--before-overlay (point-min) (point-max))
+        (move-overlay soft-narrow--after-overlay (point-min) (point-max)))
+    (if (> start (point-min))
+        (move-overlay soft-narrow--before-overlay (point-min) start)
+      (move-overlay soft-narrow--before-overlay 1 1))
+    (if (< end (point-max))
+        (move-overlay soft-narrow--after-overlay end (point-max))
+      (move-overlay soft-narrow--after-overlay 1 1)))
+  (overlay-put soft-narrow--before-overlay (quote insert-in-front-hooks)
+               (and (< (overlay-start soft-narrow--before-overlay)
+                       (overlay-end soft-narrow--before-overlay))
+                    (list (function soft-narrow--prevent-modification))))
+  (overlay-put soft-narrow--after-overlay (quote insert-behind-hooks)
+               (and (< (overlay-start soft-narrow--after-overlay)
+                       (overlay-end soft-narrow--after-overlay))
+                    (list (function soft-narrow--prevent-modification)))))
 
-(defun soft-narrow--hide-overlays ()
-  "Collapse persistent overlays to an empty range (effectively hide them)."
-  (when (overlayp soft-narrow--before-overlay)
-    (move-overlay soft-narrow--before-overlay 1 1))
-  (when (overlayp soft-narrow--after-overlay)
-    (move-overlay soft-narrow--after-overlay 1 1)))
+
+(defun soft-narrow--prevent-modification (_overlay after &rest _arguments)
+  "Reject a blocked change unless AFTER or read-only inhibition permits it."
+  (unless (or after inhibit-read-only)
+    (signal (quote text-read-only) nil)))
 
 (defun soft-narrow--destroy-overlays ()
   "Delete persistent overlays and clear buffer-local references."
@@ -225,75 +227,43 @@ Return (START . END) for valid intersection, or nil if no valid intersection."
     (delete-overlay soft-narrow--after-overlay)
     (setq soft-narrow--after-overlay nil)))
 
-(defconst soft-narrow--managed-text-properties
-  '(read-only cursor-intangible front-sticky rear-nonsticky)
-  "Text properties soft-narrow captures, applies, and restores.
-Shared by `soft-narrow--capture-property-state' and
-`soft-narrow--apply-properties' so the tracked property set stays in
-one place.")
 
-(defun soft-narrow--capture-property-state ()
-  "Capture original text property state for later restoration.
-Records positions (as markers that track buffer edits) where `read-only',
-`cursor-intangible', `front-sticky', or `rear-nonsticky' have non-nil
-values (any non-nil, not just t).  Uses `text-property-not-all' as a
-fast-path for the common case where no such properties exist."
-  (unless soft-narrow--property-snapshot
-    (let ((props soft-narrow--managed-text-properties))
-      (if (or (text-property-not-all (point-min) (point-max) 'read-only nil)
-              (text-property-not-all (point-min) (point-max) 'cursor-intangible nil)
-              (text-property-not-all (point-min) (point-max) 'front-sticky nil)
-              (text-property-not-all (point-min) (point-max) 'rear-nonsticky nil))
-          ;; Properties found — build snapshot with markers so positions
-          ;; track buffer edits (e.g., insertion in visible region).
-          (let ((state nil)
-                (max (point-max))
-                (pos (point-min)))
-            (while (< pos max)
-              (let ((vals nil))
-                (dolist (p props)
-                  (let ((v (get-text-property pos p)))
-                    (when v (push (cons p v) vals))))
-                (when vals
-                  (push (cons (copy-marker pos t) (nreverse vals)) state)))
-              (setq pos (1+ pos)))
-            (setq soft-narrow--property-snapshot (or (nreverse state)
-                                                     'empty)))
-        ;; Nothing to save — common case
-        (setq soft-narrow--property-snapshot 'empty)))))
+(defun soft-narrow--free-frame (frame)
+  "Detach both markers owned by FRAME."
+  (when (markerp (car frame))
+    (set-marker (car frame) nil))
+  (when (markerp (cdr frame))
+    (set-marker (cdr frame) nil)))
 
-(defun soft-narrow--restore-properties-in-range (snapshot &optional l r)
-  "Restore text properties recorded in SNAPSHOT, optionally limited to [L, R).
-SNAPSHOT is a list of (MARKER . PROPERTY-VALUE-ALIST) entries as captured
-by `soft-narrow--capture-property-state'.  When L and R are both non-nil,
-only entries whose marker position falls in [L, R) are restored;
-otherwise every entry with a live marker is restored."
-  (dolist (entry snapshot)
-    (let ((mpos (marker-position (car entry))))
-      (when (and mpos (or (null l) (and (>= mpos l) (< mpos r))))
-        (dolist (pv (cdr entry))
-          (put-text-property mpos (1+ mpos) (car pv) (cdr pv)))))))
+(defun soft-narrow--free-stack ()
+  "Detach all stack markers and clear the active narrowing state."
+  (let ((frames soft-narrow--stack))
+    (setq soft-narrow--stack nil
+          soft-narrow--cached-intersection nil
+          soft-narrow--cached-modification-tick nil)
+    (dolist (frame frames)
+      (soft-narrow--free-frame frame))))
 
-(defun soft-narrow--restore-property-state ()
-  "Restore text properties from snapshot, free markers, then clear snapshot."
-  (when soft-narrow--property-snapshot
-    (unless (eq soft-narrow--property-snapshot 'empty)
-      (with-silent-modifications
-        (soft-narrow--restore-properties-in-range soft-narrow--property-snapshot)
-        (dolist (entry soft-narrow--property-snapshot)
-          (set-marker (car entry) nil))))
-    (setq soft-narrow--property-snapshot nil)))
-
-(defun soft-narrow--restore-visible-properties (l r)
-  "Restore original properties to the visible region [L, R).
-Called after `remove-list-of-text-properties' on the entire buffer,
-so that other packages' text properties in the visible region are
-preserved during the narrow rather than being stripped.
-Uses marker positions so buffer edits before this call are tracked."
-  (when (and soft-narrow--property-snapshot
-             (not (eq soft-narrow--property-snapshot 'empty)))
-    (with-silent-modifications
-      (soft-narrow--restore-properties-in-range soft-narrow--property-snapshot l r))))
+(defun soft-narrow--cleanup ()
+  "Release all buffer-local narrowing state without touching buffer text."
+  (unwind-protect
+      (progn
+        (soft-narrow--free-stack)
+        (when (and soft-narrow--owns-cursor-intangible
+                   (bound-and-true-p cursor-intangible-mode))
+          (soft-narrow--set-cursor-intangible-ownership nil)))
+    (setq soft-narrow--owns-cursor-intangible nil)
+    (remove-hook (quote cursor-intangible-mode-hook)
+                 (function soft-narrow--on-cursor-intangible-mode-change) t)
+    (remove-hook (quote pre-command-hook)
+                 (function soft-narrow--guard-boundary) t)
+    (remove-hook (quote post-command-hook)
+                 (function soft-narrow--clamp-point) t)
+    (remove-hook (quote after-change-functions)
+                 (function soft-narrow--refresh-intersection) t)
+    (remove-hook (quote change-major-mode-hook)
+                 (function soft-narrow--cleanup) t)
+    (soft-narrow--destroy-overlays)))
 
 (defun soft-narrow--set-cursor-intangible-ownership (enable)
   "Toggle `cursor-intangible-mode' per ENABLE while tracking ownership.
@@ -304,109 +274,65 @@ internal toggle for an external one."
     (setq soft-narrow--owns-cursor-intangible enable)
     (cursor-intangible-mode (if enable 1 -1))))
 
+(defun soft-narrow--sync-intersection ()
+  "Refresh and return the cached intersection when shared text changed.
+The modification tick is shared by base and indirect buffers, so this also
+catches edits whose `after-change-functions` ran in a sibling buffer."
+  (let ((tick (buffer-chars-modified-tick)))
+    (unless (equal tick soft-narrow--cached-modification-tick)
+      (setq soft-narrow--cached-intersection
+            (soft-narrow--compute-intersection)
+            soft-narrow--cached-modification-tick tick)))
+  soft-narrow--cached-intersection)
+
 (defun soft-narrow--apply-properties ()
-  "Apply narrowing properties based on current intersection.
-Blocked regions get overlay face for visual deemphasis, plus
-text properties for cursor restriction and read-only protection.
-Also manages buffer-local hooks: a `pre-command-hook' to suppress
-boundary-crossing movements and a `post-command-hook' for clamping.
-Saves original property state before first narrow and restores it
-on final widen to avoid destroying properties set by other packages."
+  "Apply overlay-based narrowing for the current stack intersection."
   (let ((intersection (soft-narrow--compute-intersection)))
-    (setq soft-narrow--cached-intersection intersection)
-    (if-let* ((l (car intersection))
+    (setq soft-narrow--cached-intersection intersection
+          soft-narrow--cached-modification-tick
+          (buffer-chars-modified-tick))
+    (if intersection
+        (let ((l (car intersection))
               (r (cdr intersection)))
-        (progn
-          ;; Capture original property state before first modification
-          (soft-narrow--capture-property-state)
-          ;; Enable cursor-intangible-mode if not already active;
-          ;; track ownership so we only disable it on final widen
-          ;; if SOFT-NARROW was the one that enabled it.
-          ;; External toggles are detected in real-time via
-          ;; `cursor-intangible-mode-hook' (see
-          ;; `soft-narrow--on-cursor-intangible-mode-change').
           (unless (bound-and-true-p cursor-intangible-mode)
             (soft-narrow--set-cursor-intangible-ownership t))
-          ;; Install hook so external mode toggles release ownership
-          (add-hook 'cursor-intangible-mode-hook
-                    #'soft-narrow--on-cursor-intangible-mode-change nil t)
-          ;; Apply properties to blocked regions.
-          ;; We use remove-list-of-text-properties on the entire buffer
-          ;; followed by add-text-properties on blocked regions because
-          ;; successive narrows may change which regions are blocked vs.
-          ;; visible.  After applying, we restore original property
-          ;; values to the visible region so other packages' text
-          ;; properties are preserved during the narrow.
-          (with-silent-modifications
-            (remove-list-of-text-properties
-             (point-min) (point-max)
-             soft-narrow--managed-text-properties)
-            (add-text-properties (point-min) l
-                                 '(cursor-intangible t read-only t
-                                   rear-nonsticky (cursor-intangible)
-                                   front-sticky (cursor-intangible)))
-            (add-text-properties r (point-max)
-                                 '(cursor-intangible t read-only t))
-            ;; Restore original properties to the visible region [l, r)
-            ;; so that other packages' text properties survive the narrow.
-            (soft-narrow--restore-visible-properties l r))
+          (add-hook (quote cursor-intangible-mode-hook)
+                    (function soft-narrow--on-cursor-intangible-mode-change) nil t)
           (soft-narrow--show-overlays l r)
-          (add-hook 'pre-command-hook #'soft-narrow--guard-boundary nil t)
-          ;; Depth 10 ensures this runs after cursor-intangible-mode (depth 0).
-          (add-hook 'post-command-hook #'soft-narrow--clamp-point 10 t)
-          ;; Refresh cached bounds after edits inside the visible region,
-          ;; whose stack markers shift while the cache holds stale integers.
-          (add-hook 'after-change-functions
-                    #'soft-narrow--refresh-intersection nil t))
-      ;; No valid intersection — final widen: restore original state
-      (soft-narrow--hide-overlays)
-      (with-silent-modifications
-        (remove-list-of-text-properties
-         (point-min) (point-max)
-         soft-narrow--managed-text-properties)
-        ;; Restore any original property values that were captured
-        ;; before the first soft-narrow.
-        (soft-narrow--restore-property-state)
-        ;; Only disable cursor-intangible-mode if soft-narrow
-        ;; was the one that enabled it AND the mode is still on
-        ;; (ownership may have been released by external toggle).
-        (when (and soft-narrow--owns-cursor-intangible
-                   (bound-and-true-p cursor-intangible-mode))
-          (soft-narrow--set-cursor-intangible-ownership nil)))
-      ;; Remove hook in case ownership was released before widen
-      (remove-hook 'cursor-intangible-mode-hook
-                   #'soft-narrow--on-cursor-intangible-mode-change t)
-      (remove-hook 'pre-command-hook #'soft-narrow--guard-boundary t)
-      (remove-hook 'post-command-hook #'soft-narrow--clamp-point t)
-      (remove-hook 'after-change-functions
-                   #'soft-narrow--refresh-intersection t))))
+          (add-hook (quote pre-command-hook)
+                    (function soft-narrow--guard-boundary) nil t)
+          (add-hook (quote post-command-hook)
+                    (function soft-narrow--clamp-point) 10 t)
+          (add-hook (quote after-change-functions)
+                    (function soft-narrow--refresh-intersection) nil t)
+          (add-hook (quote change-major-mode-hook)
+                    (function soft-narrow--cleanup) nil t))
+      (soft-narrow--cleanup))))
 
 (defun soft-narrow--guard-boundary ()
   "Suppress movement commands that would leave the narrowed region.
-Runs in `pre-command-hook' so the cursor never enters blocked areas,
+Runs in `pre-command-hook` so the cursor never enters blocked areas,
 preventing visual flicker from the two-phase post-command correction."
-  (when-let* ((intersection soft-narrow--cached-intersection)
+  (when-let* ((intersection (soft-narrow--sync-intersection))
               (l (car intersection))
               (r (cdr intersection)))
     (cond
-     ;; Bottom boundary: suppress downward/forward movement
      ((and (>= (point) (1- r))
            (memq this-command
-                 '(next-line forward-char forward-paragraph
-                   scroll-up-command end-of-buffer)))
-      (setq this-command #'ignore))
-     ;; Top boundary: suppress upward/backward movement
+                 (quote (next-line forward-char forward-paragraph
+                         scroll-up-command end-of-buffer))))
+      (setq this-command (function ignore)))
      ((and (<= (point) l)
            (memq this-command
-                 '(previous-line backward-char backward-paragraph
-                   scroll-down-command beginning-of-buffer)))
-      (setq this-command #'ignore)))))
+                 (quote (previous-line backward-char backward-paragraph
+                         scroll-down-command beginning-of-buffer))))
+      (setq this-command (function ignore))))))
 
 (defun soft-narrow--clamp-point ()
   "Clamp point to the narrowed region boundaries.
 Prevents the cursor from resting inside the visually blocked overlay areas.
-Added to `post-command-hook' as a buffer-local hook."
-  (when-let* ((intersection soft-narrow--cached-intersection)
+Added to `post-command-hook` as a buffer-local hook."
+  (when-let* ((intersection (soft-narrow--sync-intersection))
               (l (car intersection))
               (r (cdr intersection)))
     (cond
@@ -414,14 +340,16 @@ Added to `post-command-hook' as a buffer-local hook."
      ((>= (point) r) (goto-char (max l (1- r)))))))
 
 (defun soft-narrow--refresh-intersection (&rest _)
-  "Recompute `soft-narrow--cached-intersection' from the current markers.
-Added to `after-change-functions' while narrowing is active.  Editing
-inside the visible region shifts the stack markers, so the cached integer
-bounds go stale; refreshing here keeps `soft-narrow--guard-boundary' and
-`soft-narrow--clamp-point' from clamping the cursor to outdated
-boundaries.  Runs only on genuine buffer changes, so per-keystroke motion
-still reads the cache in O(1)."
-  (setq soft-narrow--cached-intersection (soft-narrow--compute-intersection)))
+  "Refresh the cached intersection and blocking overlays after an edit.
+Stack markers track edits inside the visible region.  Reposition both
+persistent overlays to the resulting bounds while modification hooks are
+inhibited, so overlay maintenance cannot recursively reject the edit."
+  (when-let* ((intersection (soft-narrow--compute-intersection)))
+    (setq soft-narrow--cached-intersection intersection
+          soft-narrow--cached-modification-tick
+          (buffer-chars-modified-tick))
+    (let ((inhibit-modification-hooks t))
+      (soft-narrow--show-overlays (car intersection) (cdr intersection)))))
 
 ;;;###autoload
 (defun soft-narrow-to-region (start end)
@@ -443,35 +371,63 @@ The visible region is the intersection of all narrowed regions.
 
 To widen the region again afterwards use `soft-narrow-widen'."
   (interactive "r")
-  (unless (bound-and-true-p soft-narrow-mode) (soft-narrow-mode 1))
   ;; Validate and normalize bounds
-  (let ((start (max (min start end) (point-min)))
-        (end (min (max start end) (point-max))))
-    (push (cons (copy-marker start nil)
-                (copy-marker end t))
-          soft-narrow--stack)
-    (soft-narrow--apply-properties)
-    ;; Move point into the visible region if it landed in a blocked area,
-    ;; matching `narrow-to-region' (which always leaves point in bounds).
-    ;; Interactive calls also get this via `post-command-hook', but Lisp
-    ;; callers rely on this explicit clamp.
-    (soft-narrow--clamp-point)
-    (deactivate-mark)))
+  (let* ((lower (min start end))
+	 (upper (max start end))
+	 (start (max lower (point-min)))
+	 (end (min upper (point-max)))
+	 (previous-stack soft-narrow--stack)
+	 (previous-intersection soft-narrow--cached-intersection)
+	 (previous-cursor-intangible-mode
+          (bound-and-true-p cursor-intangible-mode))
+	 (previous-cursor-intangible-ownership
+          soft-narrow--owns-cursor-intangible)
+	 (frame (cons (copy-marker start nil) (copy-marker end t)))
+	 completed)
+    (unless (bound-and-true-p soft-narrow-mode)
+      (soft-narrow-mode 1))
+    (setq soft-narrow--stack (cons frame previous-stack))
+    (unwind-protect
+	(progn
+          (soft-narrow--apply-properties)
+          (soft-narrow--clamp-point)
+          (prog1 (deactivate-mark)
+            (setq completed t)))
+      (unless completed
+	(setq soft-narrow--stack previous-stack)
+	(condition-case nil
+            (soft-narrow--free-frame frame)
+          (error nil))
+	(condition-case nil
+            (if previous-stack
+		(soft-narrow--apply-properties)
+              (soft-narrow--cleanup))
+          (error
+           (setq soft-narrow--cached-intersection previous-intersection
+                 soft-narrow--cached-modification-tick nil)))
+	(unwind-protect
+            (condition-case nil
+		(let ((cursor-intangible-mode-hook nil)
+                      (soft-narrow--toggling-cursor-intangible t))
+                  (cursor-intangible-mode
+                   (if previous-cursor-intangible-mode 1 -1)))
+              (error nil))
+          (progn
+	    (set (quote cursor-intangible-mode)
+		 previous-cursor-intangible-mode)
+	    (setq soft-narrow--owns-cursor-intangible
+		  previous-cursor-intangible-ownership)))))))
 
 ;;;###autoload
 (defun soft-narrow-widen ()
-  "Pop one level from narrowing stack, returning to previous narrow.
-
-If no narrowing is active, this function does nothing harmlessly."
+  "Pop one narrowing level and restore the previous intersection.
+If no narrowing is active, do nothing."
   (interactive)
-  ;; Pop one level from stack
   (when soft-narrow--stack
-    (let ((frame (pop soft-narrow--stack)))
-      ;; Clean up markers from removed frame
-      (set-marker (car frame) nil)
-      (set-marker (cdr frame) nil)))
-  ;; Reapply properties based on new stack state
-  (soft-narrow--apply-properties))
+    (soft-narrow--free-frame (pop soft-narrow--stack))
+    (if soft-narrow--stack
+        (soft-narrow--apply-properties)
+      (soft-narrow--cleanup))))
 
 (defcustom soft-narrow-lighter " *"
   "Lighter used in the mode-line while mode is active."
@@ -495,28 +451,28 @@ If no narrowing is active, this function does nothing harmlessly."
   "Minor mode that binds to soft-narrow functions.
 
 The keys used are the same used by the standard Emacs functions.
-Binds that are replaced are:
-   `widen'
-   `narrow-to-region'
-   `narrow-to-defun'
-   `narrow-to-page'
-   `org-narrow-to-block'
-   `org-narrow-to-element'
-   `org-narrow-to-subtree'
-
-Stackable Narrowing:
-Successive narrowing creates intersection of all narrowed regions.
-Use `soft-narrow-widen' to pop back to previous narrow levels."
+Successive narrowing creates the intersection of all narrowed regions;
+`soft-narrow-widen` pops one level from the stack."
   :lighter (:eval (when (soft-narrow-active-p) soft-narrow-lighter))
   :keymap soft-narrow-mode-map
   :global t
-  :group 'soft-narrow
+  :group (quote soft-narrow)
   (unless soft-narrow-mode
-    (dolist (buf (buffer-list))
-      (with-current-buffer buf
-        (while (soft-narrow-active-p)
-          (soft-narrow-widen))
-        (soft-narrow--destroy-overlays)))))
+    (let (first-error)
+      (dolist (buf (buffer-list))
+        (when (buffer-live-p buf)
+          (with-current-buffer buf
+            (when (or soft-narrow--stack
+                      (overlayp soft-narrow--before-overlay)
+                      (overlayp soft-narrow--after-overlay)
+                      soft-narrow--owns-cursor-intangible)
+              (condition-case error-data
+                  (soft-narrow--cleanup)
+                (error
+                 (unless first-error
+                   (setq first-error error-data))))))))
+      (when first-error
+        (signal (car first-error) (cdr first-error))))))
 
 (defface soft-narrow-blocked-face
   '((((background light)) :foreground "Grey70")
