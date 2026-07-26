@@ -373,17 +373,22 @@ To widen the region again afterwards use `soft-narrow-widen'."
   (interactive "r")
   ;; Validate and normalize bounds
   (let* ((lower (min start end))
-	 (upper (max start end))
-	 (start (max lower (point-min)))
-	 (end (min upper (point-max)))
-	 (previous-stack soft-narrow--stack)
-	 (previous-intersection soft-narrow--cached-intersection)
-	 (previous-cursor-intangible-mode
+         (upper (max start end))
+         (start (max lower (point-min)))
+         (end (min upper (point-max)))
+         (previous-stack soft-narrow--stack)
+         (previous-intersection soft-narrow--cached-intersection)
+         (previous-cursor-intangible-mode
           (bound-and-true-p cursor-intangible-mode))
-	 (previous-cursor-intangible-ownership
+         (previous-cursor-intangible-ownership
           soft-narrow--owns-cursor-intangible)
-	 (frame (cons (copy-marker start nil) (copy-marker end t)))
-	 completed)
+         (previous-cursor-hook (copy-tree cursor-intangible-mode-hook))
+         (previous-pre-hook (copy-tree pre-command-hook))
+         (previous-post-hook (copy-tree post-command-hook))
+         (previous-change-hook (copy-tree after-change-functions))
+         (previous-major-mode-hook (copy-tree change-major-mode-hook))
+         (frame (cons (copy-marker start nil) (copy-marker end t)))
+         completed)
     (unless (bound-and-true-p soft-narrow-mode)
       (soft-narrow-mode 1))
     (setq soft-narrow--stack (cons frame previous-stack))
@@ -413,10 +418,15 @@ To widen the region again afterwards use `soft-narrow-widen'."
                    (if previous-cursor-intangible-mode 1 -1)))
               (error nil))
           (progn
-	    (set (quote cursor-intangible-mode)
-		 previous-cursor-intangible-mode)
-	    (setq soft-narrow--owns-cursor-intangible
-		  previous-cursor-intangible-ownership)))))))
+            (set (quote cursor-intangible-mode)
+                 previous-cursor-intangible-mode)
+            (setq soft-narrow--owns-cursor-intangible
+                  previous-cursor-intangible-ownership
+                  cursor-intangible-mode-hook previous-cursor-hook
+                  pre-command-hook previous-pre-hook
+                  post-command-hook previous-post-hook
+                  after-change-functions previous-change-hook
+                  change-major-mode-hook previous-major-mode-hook)))))))
 
 ;;;###autoload
 (defun soft-narrow-widen ()
